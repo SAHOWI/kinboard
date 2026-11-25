@@ -33,13 +33,13 @@ must be robust and OSI-licensed open source. Proprietary services (APNs/FCM, Goo
 
 ## 2. Current state (what exists and works)
 
-Verified on 2026-11-25: `pnpm test` (16 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
+Verified on 2026-11-25: `pnpm test` (23 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
 display and app in two browsers against the live API sync in real time ✅ · hidden lists never reach the display ✅.
 
 | Area | Status |
 |---|---|
 | `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 12 tests |
-| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `WS /api/v1/realtime`, **in-memory** repository, 4 tests |
+| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `POST /api/v1/pin/verify`, `WS /api/v1/realtime`, **in-memory** repository. The server builds the `Actor` from a **temporary dev token** (see gap #1). 11 tests |
 | `apps/web` | React 19 + Vite 6 + Tailwind 4 + Zustand. Routes: `#/` studio (side by side), `#/display`, `#/app`. Demo backend (no server) with BroadcastChannel tab sync. Falls back to demo mode automatically if the API is unreachable |
 | `apps/mobile` | Capacitor 7 config only. **Native projects not generated; never built** |
 | `infra/` | docker-compose (Postgres provisioned but **unused**), Caddyfile, Pi kiosk systemd unit. **Not tested end to end** |
@@ -84,8 +84,8 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 
 | # | Severity | Issue | Where | Fix (milestone) |
 |---|---|---|---|---|
-| 1 | 🔴 Security | **The actor is trusted from the client.** Anyone can send `elevated: true` | `app.ts`, `store.ts` | Derive the actor from the auth or device token server-side. The PIN is verified by `POST /pin/verify` and returns a short-lived elevated token (M2) |
-| 2 | 🔴 Security | The PIN is checked client-side (`"1234"` hard-coded) | `components/PinPad.tsx` | Argon2id hash on the household, server endpoint, rate limit (M2) |
+| 1 | 🔴 Security | **The actor is trusted from the client.** Anyone can send `elevated: true` | `app.ts`, `auth.ts` | ✅ **Fixed 2026-11-25.** The server builds the Actor and ignores the client's. Identity comes from unsigned dev tokens (`Bearer dev:display`, `dev:app:<memberId>`, `?token=` on the WebSocket), which anyone can forge, so they are refused when `NODE_ENV=production` unless `KINBOARD_DEV_AUTH=1`. Display elevation needs a server-issued PIN token. **Remaining:** replace dev tokens with better-auth sessions and device tokens (M2 steps 3 and 5) |
+| 2 | 🔴 Security | The PIN is checked client-side (`"1234"` hard-coded) | `auth.ts` | 🟡 **Partly fixed 2026-11-25.** `POST /pin/verify` checks it server-side (constant-time compare, 5 failures → 60 s lockout) and returns a 5-min elevation token (`x-kinboard-elevation`). The PIN comes from `KINBOARD_PIN` (`1234` only with dev auth). **Remaining:** Argon2id hash on the household, persisted lockout (M2) |
 | 3 | 🔴 Privacy | App clients receive **all** hidden lists, not only those where they are in `visibleTo` | `GET /snapshot` | Add `projectForMember(state, memberId)` and apply it to snapshot and WS (M2) |
 | 4 | 🟠 Data | In-memory repository, so data is lost on restart. Single hard-coded household `hh_1` | `repository.ts` | Drizzle + Postgres, `change_log`, LISTEN/NOTIFY (M2) |
 | 5 | 🟠 Sync | No `GET /sync?since=rev`. Reconnect does a full snapshot. No offline outbox | `backend.ts` | Implement spec §5.3 (M2) |
@@ -99,7 +99,7 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 | 13 | 🟢 Tests | No component or E2E tests for the web app | `apps/web` | Testing Library + Playwright (two contexts for realtime) |
 | 14 | 🔴 Security | `task.complete` and `reward.request` could be crafted to farm points: unassigned members, invented or past dates, a child acting for a sibling, unknown members | `reducer.ts` | ✅ **Fixed 2026-11-25.** The task must be assigned and due that day, and without the PIN the date must be within ±1 day of `cmd.at`. A signed-in child acts only for themself. Tests in `domain.test.ts` and `app.test.ts` |
 | 15 | 🟠 Data | `*.add` commands accepted duplicate entity ids | `reducer.ts` | ✅ **Fixed 2026-11-25.** They are rejected with `invalid` |
-| 16 | 🟠 Security | The date window trusts the client's `cmd.at` | `app.ts` | The server should stamp `at` when it builds the Actor (gap #1). This changes the sync protocol, so ask first |
+| 16 | 🟠 Security | The date window trusts the client's `cmd.at` | `app.ts` | The server should stamp `at` itself. This changes the sync protocol, so ask first |
 | 17 | 🟠 Sync | `resync()` clears `pending`. An own echo arriving afterwards is applied twice (`item.toggle` flips back, `item.add` duplicates). Clients never compare `rev` | `store.ts` | Keep pending ids until echoed, and resync on a rev gap (with M2 step 7) |
 | 18 | 🟡 Security | CORS allows every origin (`origin: true`) while there is no auth | `app.ts` | Restrict to configured origins (M2 auth) |
 | 19 | 🟡 Infra | No `.dockerignore` (`COPY . .` copies `node_modules`). Compose requires `KINBOARD_MASTER_KEY`, which nothing reads. The API runs via `tsx` in production | `infra/`, `apps/api/Dockerfile` | Fix together with #12 |

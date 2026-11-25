@@ -24,6 +24,9 @@ interface Store {
   pending: Set<string>;
   init(device: "display" | "app"): Promise<void>;
   dispatch(input: CommandInput, actor: Actor): Promise<boolean>;
+  /** Checks the adult PIN with the backend. Resolves to the elevation lifetime in ms, or null. */
+  verifyPin(pin: string): Promise<number | null>;
+  lock(): void;
   toast(text: string, tone?: Toast["tone"]): void;
 }
 
@@ -93,6 +96,21 @@ export const useStore = create<Store>((set, get) => ({
       set({ snapshot: await backend.load().catch(() => snapshot) }); // roll back to server truth
       return false;
     }
+  },
+
+  async verifyPin(pin) {
+    const backend = get().backend;
+    if (!backend) return null;
+    try {
+      return await backend.verifyPin(pin);
+    } catch (e) {
+      get().toast((e as Error).message, "error"); // e.g. locked out after repeated failures
+      return null;
+    }
+  },
+
+  lock() {
+    get().backend?.lock();
   },
 
   toast(text, tone = "info") {

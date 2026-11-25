@@ -163,6 +163,7 @@ All mutable rows carry `rev` (a household-scoped monotonic counter) and `updated
 ### 5.1 Conventions
 - Base `/api/v1`, JSON, Zod schemas shared from `packages/shared` and exposed as OpenAPI 3.1 via `@fastify/swagger`.
 - Auth: `Authorization: Bearer <access JWT>` (users, 15 min) or `Device <token>` (displays, long-lived, revocable, scoped to the household).
+- Interim (until M2 auth and pairing): unsigned dev tokens `Bearer dev:display` / `Bearer dev:app:<memberId>` (`?token=` on the WebSocket). The server builds the command `Actor` from the identity and ignores any client-sent actor. Dev tokens are refused when `NODE_ENV=production` unless `KINBOARD_DEV_AUTH=1`. A display adds `x-kinboard-elevation: <token>` from `/pin/verify` to act as an adult.
 - Idempotency: every mutation accepts an `Idempotency-Key` header (offline outbox replay).
 - Errors: RFC 9457 `application/problem+json`.
 

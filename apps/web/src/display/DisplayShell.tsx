@@ -21,7 +21,6 @@ const NAV: { id: DisplayView; icon: string; label: string }[] = [
   { id: "rewards", icon: "⭐", label: "Rewards" },
 ];
 
-const PIN_TTL = 5 * 60_000; // elevated session lasts 5 minutes (spec §5.2)
 const IDLE_MS = 3 * 60_000; // photo-frame / standby after 3 minutes (FR-PHO-02)
 
 /** The 1920×1080 kiosk UI. Fills its parent box; never uses viewport units, so it can be scaled in the studio. */
@@ -78,7 +77,10 @@ export function DisplayShell() {
       }),
     elevated,
     withPin: (fn) => (elevatedRef.current > Date.now() ? fn() : setPinFor(() => fn)),
-    lock: () => setElevatedUntil(0),
+    lock: () => {
+      setElevatedUntil(0);
+      useStore.getState().lock();
+    },
     run: (input: CommandInput, memberId = null) => dispatch(input, actor(memberId)),
     actor,
   };
@@ -220,9 +222,13 @@ export function DisplayShell() {
         <Modal open={!!pinFor} onClose={() => setPinFor(null)} width={420}>
           <PinPad
             onCancel={() => setPinFor(null)}
+            verify={async (pin) => {
+              const ttlMs = await useStore.getState().verifyPin(pin);
+              if (ttlMs) setElevatedUntil(Date.now() + ttlMs);
+              return !!ttlMs;
+            }}
             onSuccess={() => {
               const fn = pinFor;
-              setElevatedUntil(Date.now() + PIN_TTL);
               setPinFor(null);
               // run after state update so the actor is elevated
               setTimeout(() => fn?.(), 0);

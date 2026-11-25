@@ -1,25 +1,30 @@
 import { useState } from "react";
 
-/** Adult PIN entry (FR-HH-08). MVP: PIN is checked client-side ("1234"); M2: POST /pin/verify → short-lived token. */
-export const DEMO_PIN = "1234";
-
-export function PinPad({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
+/** Adult PIN entry (FR-HH-08). The PIN is checked by the server (`POST /pin/verify`), never in the UI. */
+export function PinPad({
+  verify,
+  onSuccess,
+  onCancel,
+}: { verify: (pin: string) => Promise<boolean>; onSuccess: () => void; onCancel: () => void }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const press = (d: string) => {
-    if (pin.length >= 4) return;
+    if (busy || pin.length >= 4) return;
     const next = pin + d;
     setError(false);
     setPin(next);
     if (next.length === 4) {
-      setTimeout(() => {
-        if (next === DEMO_PIN) onSuccess();
+      setBusy(true);
+      void verify(next).then((ok) => {
+        setBusy(false);
+        if (ok) onSuccess();
         else {
           setError(true);
           setPin("");
         }
-      }, 150);
+      });
     }
   };
 
