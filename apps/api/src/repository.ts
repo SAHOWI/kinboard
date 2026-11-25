@@ -14,10 +14,12 @@ export class InMemoryRepository implements Repository {
   private states = new Map<string, Snapshot>();
   private seen = new Map<string, Set<string>>(); // idempotency keys per household
 
+  constructor(private seed: () => Snapshot = createSeed) {}
+
   private get(id: string): Snapshot {
     let s = this.states.get(id);
     if (!s) {
-      s = createSeed();
+      s = this.seed();
       this.states.set(id, s);
     }
     return s;

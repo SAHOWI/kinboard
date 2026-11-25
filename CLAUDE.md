@@ -11,7 +11,7 @@ Current status and next steps are in **`HANDOVER.md`**. Requirements are in `doc
 
 ## Layout
 - `packages/shared`: Zod types, **commands**, the **reducer `applyCommand`** (including permissions), selectors, seed
-- `apps/api`: Fastify REST + WebSocket. The `Repository` port has an in-memory implementation now; Drizzle/Postgres is next
+- `apps/api`: Fastify REST + WebSocket. `Repository` port: `DrizzleRepository` (Postgres via `DATABASE_URL`, PGlite in dev) and `InMemoryRepository` (tests). Schema changes: edit `src/db/schema.ts`, then `pnpm --filter @kinboard/api db:generate` and commit the SQL
 - `apps/web`: React 19, Vite, Tailwind 4 (tokens in `src/styles/index.css`), Zustand store in `src/data/`
 - `apps/mobile`: Capacitor wrapper around the `apps/web` build
 

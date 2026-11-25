@@ -33,16 +33,16 @@ must be robust and OSI-licensed open source. Proprietary services (APNs/FCM, Goo
 
 ## 2. Current state (what exists and works)
 
-Verified on 2026-11-25: `pnpm test` (26 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
+Verified on 2026-11-25: `pnpm test` (34 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
 display and app in two browsers against the live API sync in real time ✅ · hidden lists reach only members in `visibleTo` and never the display ✅.
 
 | Area | Status |
 |---|---|
 | `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 13 tests |
-| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `POST /api/v1/pin/verify`, `WS /api/v1/realtime`, **in-memory** repository. The server builds the `Actor` from a **temporary dev token** (see gap #1). 13 tests |
+| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `POST /api/v1/pin/verify`, `WS /api/v1/realtime`, **Drizzle repository** on PostgreSQL (`DATABASE_URL`) or embedded PGlite in dev (`apps/api/.pglite/`, delete it to reset the demo data); `KINBOARD_STORE=memory` keeps the in-memory one. The server builds the `Actor` from a **temporary dev token** (see gap #1). 21 tests |
 | `apps/web` | React 19 + Vite 6 + Tailwind 4 + Zustand. Routes: `#/` studio (side by side), `#/display`, `#/app`. Demo backend (no server) with BroadcastChannel tab sync. Falls back to demo mode automatically if the API is unreachable |
 | `apps/mobile` | Capacitor 7 config only. **Native projects not generated; never built** |
-| `infra/` | docker-compose (Postgres provisioned but **unused**), Caddyfile, Pi kiosk systemd unit. **Not tested end to end** |
+| `infra/` | docker-compose (the API now uses its Postgres through `DATABASE_URL`), Caddyfile, Pi kiosk systemd unit. **Not tested end to end** (the local Podman VM is broken). A production start has no household yet: until M2 step 8 set `KINBOARD_SEED_DEMO=1` to seed the demo |
 | Not started | Auth, pairing, PostgreSQL, calendar sync, push, i18n, OTA, display agent, photo upload, recipes |
 
 Live demo (static single-file build): `https://claude.ai/artifact/F3XVcHg6VQ8tUxA4crTwjE` (private to Holger).
@@ -87,9 +87,9 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 | 1 | 🔴 Security | **The actor is trusted from the client.** Anyone can send `elevated: true` | `app.ts`, `auth.ts` | ✅ **Fixed 2026-11-25.** The server builds the Actor and ignores the client's. Identity comes from unsigned dev tokens (`Bearer dev:display`, `dev:app:<memberId>`, `?token=` on the WebSocket), which anyone can forge, so they are refused when `NODE_ENV=production` unless `KINBOARD_DEV_AUTH=1`. Display elevation needs a server-issued PIN token. **Remaining:** replace dev tokens with better-auth sessions and device tokens (M2 steps 3 and 5) |
 | 2 | 🔴 Security | The PIN is checked client-side (`"1234"` hard-coded) | `auth.ts` | 🟡 **Partly fixed 2026-11-25.** `POST /pin/verify` checks it server-side (constant-time compare, 5 failures → 60 s lockout) and returns a 5-min elevation token (`x-kinboard-elevation`). The PIN comes from `KINBOARD_PIN` (`1234` only with dev auth). **Remaining:** Argon2id hash on the household, persisted lockout (M2) |
 | 3 | 🔴 Privacy | App clients receive **all** hidden lists, not only those where they are in `visibleTo` | `reducer.ts`, `app.ts` | ✅ **Fixed 2026-11-25.** `projectForMember(state, memberId)` on snapshot and realtime. Commands on a hidden list the actor can't see fail with `not_found` |
-| 4 | 🟠 Data | In-memory repository, so data is lost on restart. Single hard-coded household `hh_1` | `repository.ts` | Drizzle + Postgres, `change_log`, LISTEN/NOTIFY (M2) |
+| 4 | 🟠 Data | In-memory repository, so data was lost on restart. Single hard-coded household `hh_1` | `db/` | ✅ **Fixed 2026-11-25** (except the household): Drizzle schema + migrations in `apps/api/drizzle`, `DrizzleRepository` writes each command in one transaction (row lock, reducer, diffed entity rows, `change_log`, receipt). LISTEN/NOTIFY deferred to multi-node / delta sync. `hh_1` stays until M2 step 8 |
 | 5 | 🟠 Sync | No `GET /sync?since=rev`. Reconnect does a full snapshot. No offline outbox | `backend.ts` | Implement spec §5.3 (M2) |
-| 6 | 🟠 Sync | The idempotency `Set` grows forever | `repository.ts` | Table with a TTL (M2) |
+| 6 | 🟠 Sync | The idempotency `Set` grew forever | `db/repository.ts` | ✅ **Fixed 2026-11-25** for Postgres: `command_receipt` table, pruned after 7 days at start and every 6 h. The in-memory repository still grows (tests only) |
 | 7 | 🟡 Leak | `item.remove` on a hidden list sent its item id to displays | `app.ts` broadcast | ✅ **Fixed 2026-11-25.** The touched list is resolved before the command is applied (`hiddenListOf`) |
 | 8 | 🟡 Time | Recurrence uses the "floating time" trick with browser-local time. Household timezone is ignored | `selectors.ts` | Expand in `household.timezone` using `@date-fns/tz` |
 | 9 | 🟡 UX | Display time grid is fixed at 07:00–22:00. Home routine card has empty space when there are few tasks | `CalendarView.tsx`, `HomeView.tsx` | Auto-range. Show upcoming chores |
@@ -110,7 +110,7 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 Do these in order. Each step should be a separate PR (or commit) with tests.
 
 1. **Repo hygiene.** git init, a CI workflow (install → lint → typecheck → test → build), and Turborepo for cached builds (optional).
-2. **Postgres + Drizzle.** Schema from spec §4.1, migrations, a `DrizzleRepository` implementing `Repository`, and transactional `apply` that writes entity rows plus a `change_log` row. Keep `InMemoryRepository` for tests. Add the docker-compose `postgres` service to `pnpm dev` (or use PGlite for local dev).
+2. ~~**Postgres + Drizzle.**~~ Done 2026-11-25. Deviations from spec §4.1: text ids instead of UUID v7, event times kept as floating text (gap #8), no tombstones or per-row `rev` yet (step 7), no LISTEN/NOTIFY yet. Run `DATABASE_URL_TEST=postgres://… pnpm test` to run the repository suite against a real Postgres too.
 3. **Auth.** better-auth (e-mail/password + magic link), sessions, `users ↔ members` link. **The server builds the `Actor`.** Remove `actor` from the client payload (fixes gap #1).
 4. **Adult PIN.** Hashed PIN, `POST /pin/verify` returning an elevated token valid for 5 min, rate limiting (gap #2).
 5. **Device pairing.** Device-code flow (spec §5.2): the display shows a QR code and short code, the app claims it, and the display receives a revocable device token. Remote revoke (FR-HH-05, FR-HH-07).

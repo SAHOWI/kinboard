@@ -40,11 +40,11 @@ pnpm lint        # Biome
 apps/
   web/        React 19 + Vite + Tailwind 4: the /display (kiosk) and /app (mobile) shells
   mobile/     Capacitor 7 project wrapping the web build for iOS/Android
-  api/        Fastify 5: REST commands, snapshot, WebSocket realtime, in-memory repository
+  api/        Fastify 5: REST commands, snapshot, WebSocket realtime, Drizzle/PostgreSQL repository
 packages/
   shared/     Zod schemas, the command reducer, permissions, recurrence (rrule), seed data
 infra/
-  docker-compose.yml, Caddyfile   self-hosting (Postgres provisioned for M2)
+  docker-compose.yml, Caddyfile   self-hosting (API + PostgreSQL + Caddy)
   kiosk/                          Raspberry Pi kiosk: Cage + Chromium systemd unit
 docs/         analysis, FRD, specification
 ```
@@ -55,7 +55,7 @@ Every state change is a typed **command** (`task.complete`, `item.add`, `reward.
 A single pure function, `applyCommand(state, command)` in `packages/shared`, runs **on the server** as the authority,
 **in the client** for instant optimistic updates, and **in the demo backend**. Permissions such as child mode and hidden lists live in that same reducer,
 so the UI, server and tests can never disagree. The server broadcasts applied commands over WebSocket, and clients replay them.
-Milestone M2 swaps the `InMemoryRepository` for Drizzle/PostgreSQL with a `change_log` table and `LISTEN/NOTIFY` (spec §5.3).
+Data is stored in PostgreSQL through Drizzle (`DATABASE_URL`). Without it, `pnpm dev` uses an embedded PGlite database in `apps/api/.pglite/`; delete that folder to reset the demo data.
 
 ## MVP scope (milestone M1) ✅
 

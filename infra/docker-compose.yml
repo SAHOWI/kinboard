@@ -1,7 +1,7 @@
 # Self-hosted Kinboard: `cp infra/.env.example infra/.env`, fill in the secrets, then
 # `docker compose -f infra/docker-compose.yml up -d --build`. Compose refuses to start without them.
-# MVP note: the API still uses its in-memory repository. Postgres is provisioned now
-# so milestone M2 (Drizzle + pg-boss) can switch over without changing the infrastructure.
+# The API stores its data in this Postgres (migrations run on start). Until household creation lands
+# (M2 step 8), add KINBOARD_SEED_DEMO=1 to the api environment to start with the demo household.
 services:
   postgres:
     image: postgres:17-alpine

@@ -76,7 +76,8 @@ with **two responsive layout shells** (`/display`, `/app`). Domain logic, schema
 | QR scan | **zxing-wasm** (in WebView) | MIT/Apache | No proprietary ML Kit dependency |
 | API server | **Node.js 22 LTS** + **Fastify 5** | MIT | Fast, schema-first, mature plugins |
 | WebSocket | **@fastify/websocket** (ws) | MIT | Realtime fan-out |
-| ORM / migrations | **Drizzle ORM** + drizzle-kit | Apache-2.0 | SQL-first, typed, light |
+| ORM / migrations | **Drizzle ORM** + drizzle-kit, driver **pg** (node-postgres) | Apache-2.0 / MIT / MIT | SQL-first, typed, light |
+| Embedded DB (dev/test only) | **PGlite** (`@electric-sql/pglite`) | Apache-2.0 | Postgres in WASM: tests and `pnpm dev` without a database server. Never used in production |
 | Database | **PostgreSQL 17** | PostgreSQL | Proven. LISTEN/NOTIFY gives fan-out without Redis |
 | Job queue | **pg-boss** | MIT | Postgres-backed jobs, so no extra infrastructure |
 | Auth | **better-auth** (e-mail/password, magic link, passkeys, OAuth) + **argon2** | MIT | Self-hosted, no SaaS |
@@ -275,7 +276,7 @@ kinboard/
 ```
 
 - `pnpm dev` starts the API (port 8787) and web (port 5173). Open `/display` (kiosk layout) and `/app` (mobile layout) side by side to see realtime sync.
-- The MVP API uses an **in-memory repository** behind a `Repository` interface, so the UI can be developed before the database layer. The Drizzle/PostgreSQL implementation replaces it in milestone M2.
+- The API persists through the `Repository` interface: `DrizzleRepository` on PostgreSQL (`DATABASE_URL`), or on embedded PGlite in `apps/api/.pglite/` when `pnpm dev` runs without a database. `KINBOARD_STORE=memory` selects the in-memory repository. Migrations live in `apps/api/drizzle` and run on start.
 - The web app has a **demo mode** (`VITE_DEMO=1`) with seeded local data and no server, used for design reviews and static previews.
 
 ## 11. Testing strategy
