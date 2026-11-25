@@ -15,6 +15,13 @@
       "when": 1795647490717,
       "tag": "0001_change_feed",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795649058560,
+      "tag": "0002_pin_attempt",
+      "breakpoints": true
     }
   ]
 }

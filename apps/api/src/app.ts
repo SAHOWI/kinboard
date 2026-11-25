@@ -3,7 +3,15 @@ import websocket from "@fastify/websocket";
 import { Command, DomainError, projectChanges, projectForMember } from "@kinboard/shared";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
-import { type Identity, PinGate, actorFor, bearerToken, parseDevToken } from "./auth.ts";
+import {
+  type Identity,
+  PinFormatError,
+  PinGate,
+  actorFor,
+  bearerToken,
+  parseDevToken,
+  pinPepper,
+} from "./auth.ts";
 import { InMemoryRepository, type Repository } from "./repository.ts";
 
 /** MVP: single demo household. M2: household resolved from the auth / device token. */
@@ -12,8 +20,13 @@ const HOUSEHOLD = "hh_1";
 export interface AppOptions {
   /** Accept unsigned `dev:` identity tokens. Default: on unless NODE_ENV=production (override: KINBOARD_DEV_AUTH=1). */
   devAuth?: boolean;
-  /** Adult PIN for shared displays. Default: KINBOARD_PIN, or "1234" while dev auth is on. Unset → PIN elevation off. */
+  /**
+   * Initial adult PIN, set only if the household has none yet (an adult can change it in the app).
+   * Default: KINBOARD_PIN, or "1234" while dev auth is on. Without any PIN, display elevation is off.
+   */
   pin?: string;
+  /** Argon2 pepper for the PIN hash. Default: derived from KINBOARD_MASTER_KEY. */
+  pepper?: Buffer;
   now?: () => number;
 }
 
@@ -25,11 +38,14 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
     opts.devAuth ?? (process.env.NODE_ENV !== "production" || process.env.KINBOARD_DEV_AUTH === "1");
   const pin = "pin" in opts ? opts.pin : (process.env.KINBOARD_PIN ?? (devAuth ? "1234" : undefined));
   const now = opts.now ?? Date.now;
-  const pins = new PinGate(pin, now);
+  const pepper = "pepper" in opts ? opts.pepper : pinPepper(process.env.KINBOARD_MASTER_KEY);
+  const pins = new PinGate(repo, { pepper, now });
 
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const sockets = new Set<{ ws: WebSocket; identity: Identity }>();
   if (devAuth) app.log.warn("dev auth is ON: unsigned dev: tokens are accepted. Never expose this server.");
+  if (!pepper) app.log.warn("KINBOARD_MASTER_KEY is not set: the PIN hash is not peppered.");
+  if (pin) app.addHook("onReady", () => pins.ensurePin(HOUSEHOLD, pin));
 
   app.register(cors, { origin: true });
   app.register(websocket);
@@ -71,13 +87,32 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
   app.post("/api/v1/pin/verify", async (req, reply) => {
     const id = await identify(req);
     if (!id) return problem(reply, 401, "unauthorized");
-    if (id.device !== "display" || !pins.enabled)
+    if (id.device !== "display")
       return problem(reply, 403, "forbidden", "PIN elevation is only available on displays");
     const attempt = (req.body as { pin?: unknown } | null)?.pin;
-    const result = pins.verify(id, typeof attempt === "string" ? attempt : "");
-    if (result === "locked") return problem(reply, 429, "too_many_attempts", "Try again in a minute");
+    const result = await pins.verify(HOUSEHOLD, id, typeof attempt === "string" ? attempt : "");
+    if (result === "unset") return problem(reply, 403, "no_pin", "No adult PIN is set for this household");
+    if (result === "locked")
+      return problem(reply, 429, "too_many_attempts", "Too many wrong PINs. Try again later");
     if (!result) return problem(reply, 401, "wrong_pin");
     return result;
+  });
+
+  /** An adult on the app sets the household PIN (FR-HH-08). Stored only as an Argon2id hash. */
+  app.put("/api/v1/pin", async (req, reply) => {
+    const id = await identify(req);
+    if (!id) return problem(reply, 401, "unauthorized");
+    const actor = actorFor(id, await repo.snapshot(HOUSEHOLD), false);
+    if (actor.device !== "app" || !actor.elevated)
+      return problem(reply, 403, "forbidden", "Only an adult in the app can change the PIN");
+    const pin = (req.body as { pin?: unknown } | null)?.pin;
+    try {
+      await pins.setPin(HOUSEHOLD, typeof pin === "string" ? pin : "");
+    } catch (e) {
+      if (e instanceof PinFormatError) return problem(reply, 400, "invalid_pin", e.message);
+      throw e;
+    }
+    return reply.code(204).send();
   });
 
   /** Command endpoint: identify → build actor → validate → apply → broadcast. Idempotent by command id. */
@@ -89,7 +124,7 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
     const actor = actorFor(
       id,
       before,
-      pins.isElevated(id, typeof elevation === "string" ? elevation : undefined),
+      pins.isElevated(HOUSEHOLD, id, typeof elevation === "string" ? elevation : undefined),
     );
     const body = typeof req.body === "object" && req.body !== null ? req.body : {};
     // Whatever actor the client sent is replaced by the one the server derived.

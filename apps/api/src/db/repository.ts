@@ -8,7 +8,7 @@ import {
 } from "@kinboard/shared";
 import { type SQL, and, asc, eq, getTableColumns, gt, inArray, lt, or, sql } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
-import type { Applied, Repository } from "../repository.ts";
+import type { Applied, PinAttempts, Repository } from "../repository.ts";
 import type { Db } from "./client.ts";
 import * as t from "./schema.ts";
 
@@ -260,6 +260,49 @@ export class DrizzleRepository implements Repository {
       ...(r.op === "delete" ? { prev: r.payload } : { data: r.payload }),
     }));
     return { rev: h.rev, changes };
+  }
+
+  async getPinHash(householdId: string): Promise<string | null> {
+    const [h] = await this.db
+      .select({ pinHash: t.household.pinHash })
+      .from(t.household)
+      .where(eq(t.household.id, householdId));
+    return h?.pinHash ?? null;
+  }
+
+  async setPinHash(householdId: string, hash: string): Promise<void> {
+    await this.db.update(t.household).set({ pinHash: hash }).where(eq(t.household.id, householdId));
+  }
+
+  async getPinAttempts(householdId: string, scope: string): Promise<PinAttempts | null> {
+    const [a] = await this.db
+      .select()
+      .from(t.pinAttempt)
+      .where(and(eq(t.pinAttempt.householdId, householdId), eq(t.pinAttempt.scope, scope)));
+    if (!a) return null;
+    return {
+      failures: a.failures,
+      windowStart: a.windowStart.getTime(),
+      lockedUntil: a.lockedUntil?.getTime() ?? 0,
+    };
+  }
+
+  async setPinAttempts(householdId: string, scope: string, attempts: PinAttempts | null): Promise<void> {
+    if (!attempts) {
+      await this.db
+        .delete(t.pinAttempt)
+        .where(and(eq(t.pinAttempt.householdId, householdId), eq(t.pinAttempt.scope, scope)));
+      return;
+    }
+    const row = {
+      failures: attempts.failures,
+      windowStart: new Date(attempts.windowStart),
+      lockedUntil: attempts.lockedUntil ? new Date(attempts.lockedUntil) : null,
+    };
+    await this.db
+      .insert(t.pinAttempt)
+      .values({ householdId, scope, ...row })
+      .onConflictDoUpdate({ target: [t.pinAttempt.householdId, t.pinAttempt.scope], set: row });
   }
 
   /** Deletes idempotency receipts older than 7 days before `now`. Returns how many. */

@@ -17,11 +17,29 @@ export interface Applied {
   changes: StoredChange[];
 }
 
+/** Failed PIN attempts for one scope (a device identity, or "*" for the whole household). */
+export interface PinAttempts {
+  failures: number;
+  /** Start of the counting window (ms since epoch). */
+  windowStart: number;
+  /** Locked until (ms since epoch); 0 when not locked. */
+  lockedUntil: number;
+}
+
+/** Server-only credentials. Never part of the Snapshot, so never sent to a client (gap #2). */
+export interface PinStore {
+  getPinHash(householdId: string): Promise<string | null>;
+  setPinHash(householdId: string, hash: string): Promise<void>;
+  getPinAttempts(householdId: string, scope: string): Promise<PinAttempts | null>;
+  /** `null` clears the record. */
+  setPinAttempts(householdId: string, scope: string, attempts: PinAttempts | null): Promise<void>;
+}
+
 /**
  * Persistence port: `DrizzleRepository` (PostgreSQL / PGlite) and `InMemoryRepository` (tests).
  * Each command is applied atomically and recorded as entity changes for delta sync (spec §5.3).
  */
-export interface Repository {
+export interface Repository extends PinStore {
   snapshot(householdId: string): Promise<Snapshot>;
   apply(householdId: string, cmd: Command): Promise<Applied>;
   /** All changes after `since`, or null when that history is unavailable (the client reloads the snapshot). */
@@ -37,6 +55,8 @@ interface Household {
 
 export class InMemoryRepository implements Repository {
   private households = new Map<string, Household>();
+  private pinHashes = new Map<string, string>();
+  private attempts = new Map<string, PinAttempts>();
 
   constructor(private seed: () => Snapshot = createSeed) {}
 
@@ -64,6 +84,24 @@ export class InMemoryRepository implements Repository {
     h.state = next;
     h.seen.add(cmd.id);
     return { state: next, fromRev, replay: false, changes };
+  }
+
+  async getPinHash(householdId: string) {
+    return this.pinHashes.get(householdId) ?? null;
+  }
+
+  async setPinHash(householdId: string, hash: string) {
+    this.pinHashes.set(householdId, hash);
+  }
+
+  async getPinAttempts(householdId: string, scope: string) {
+    const a = this.attempts.get(`${householdId}|${scope}`);
+    return a ? { ...a } : null;
+  }
+
+  async setPinAttempts(householdId: string, scope: string, attempts: PinAttempts | null) {
+    if (attempts) this.attempts.set(`${householdId}|${scope}`, { ...attempts });
+    else this.attempts.delete(`${householdId}|${scope}`);
   }
 
   async changesSince(householdId: string, since: number) {

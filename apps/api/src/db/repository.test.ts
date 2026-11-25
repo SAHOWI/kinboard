@@ -180,6 +180,23 @@ describe.each(backends)("DrizzleRepository on %s", (_name, open) => {
     expect(await repo.changesSince(HH, from)).toEqual(await memory.changesSince(HH, from));
   });
 
+  it("stores the PIN hash and lockout state server-side only (gap #2)", async () => {
+    const repo = await fresh();
+    expect(await repo.getPinHash(HH)).toBeNull();
+    await repo.setPinHash(HH, "$argon2id$v=19$test");
+    expect(await repo.getPinHash(HH)).toBe("$argon2id$v=19$test");
+    expect(JSON.stringify(await repo.snapshot(HH))).not.toContain("argon2"); // never in a snapshot
+
+    const locked = { failures: 5, windowStart: 1_000, lockedUntil: 61_000 };
+    await repo.setPinAttempts(HH, "display:", locked);
+    await repo.setPinAttempts(HH, "display:", { ...locked, failures: 6 });
+    expect(await repo.getPinAttempts(HH, "display:")).toEqual({ ...locked, failures: 6 });
+    await repo.setPinAttempts(HH, "*", { failures: 1, windowStart: 2_000, lockedUntil: 0 });
+    expect(await repo.getPinAttempts(HH, "*")).toEqual({ failures: 1, windowStart: 2_000, lockedUntil: 0 });
+    await repo.setPinAttempts(HH, "display:", null);
+    expect(await repo.getPinAttempts(HH, "display:")).toBeNull();
+  });
+
   it("prunes old idempotency receipts", async () => {
     const repo = await fresh();
     const c = cmd({ type: "item.check", itemId: "i_s0", checked: true }, child);

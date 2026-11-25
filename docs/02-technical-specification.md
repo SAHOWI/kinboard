@@ -185,7 +185,8 @@ All mutable rows carry `rev` (a household-scoped monotonic counter) and `updated
 | GET/POST/PATCH/DELETE | `/rewards`, `/rewards/:id/redeem`, `/redemptions/:id/decide` | Rewards |
 | GET/POST/PATCH/DELETE | `/lists`, `/lists/:id/items` | Lists |
 | POST | `/external-calendars` | Link a provider (ICS URL, CalDAV creds, or OAuth code) |
-| POST | `/pin/verify` | Verify the adult PIN on a display → short-lived elevated token (5 min) |
+| POST | `/pin/verify` | Verify the adult PIN on a display → short-lived elevated token (5 min). 401 wrong, 429 locked out, 403 no PIN set |
+| PUT | `/pin` | An adult on the app sets the household PIN (4–8 digits). Not a command: the hash never enters the snapshot |
 | GET | `/sync?since=<rev>` | `{rev, changes}` since a revision, filtered per viewer, or `{reset:true}` when that history is unavailable |
 | WS | `/realtime` | Server → client `{type:"changes", rev, changes}` per revision, filtered per viewer. Client → server `ping` heartbeat |
 
@@ -252,6 +253,7 @@ Members with the `child` role act on the display without a PIN only for **comple
 ## 9. Security and privacy
 
 - Threat model (STRIDE) per release. Main risks: device theft (mitigation: revocation and remote wipe), OAuth token leakage (mitigation: encryption at rest and minimal scopes such as `calendar.events` only), child data exposure (mitigation: no analytics and hidden lists filtered server-side for display tokens).
+- The adult PIN is stored only as an **Argon2id** hash (19 MiB memory, 2 passes) with a **pepper** derived from `KINBOARD_MASTER_KEY` via HKDF, so a database leak alone does not reveal a 4-digit PIN. Wrong attempts lock a device after 5 tries (60 s) and the whole household after 20 per hour (15 min); counters live in `pin_attempt` and survive restarts.
 - Hidden lists are **filtered server-side per viewer** (`projectForMember`): only members in `visibleTo` receive them, displays never do. Realtime events touching a hidden list reach other viewers only as `{type:"rev"}`, and commands on a hidden list the actor can't see fail with `not_found`, so its existence is not revealed.
 - Rate limiting with `@fastify/rate-limit`, CSP headers, and SameSite cookies for web sessions.
 - GDPR: a record of processing activities, DPA template for hosted service, export and delete endpoints, data retention (completions > 13 months are aggregated).

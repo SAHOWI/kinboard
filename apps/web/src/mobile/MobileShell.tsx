@@ -537,6 +537,56 @@ function ListsTab({ snapshot, run, lists }: TabProps & { lists: Snapshot["lists"
   );
 }
 
+/** Adults set the display's family PIN (FR-HH-08). The server keeps only an Argon2id hash. */
+function PinCard({ memberId }: { memberId: string }) {
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const valid = /^\d{4,8}$/.test(pin);
+  return (
+    <>
+      <H>Family PIN</H>
+      <Card>
+        <p className="mb-3 text-[13px] text-ink-2">
+          Unlocks adult actions on the wall display. 4–8 digits; only a hash is stored on the server.
+        </p>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid || busy) return;
+            setBusy(true);
+            void useStore
+              .getState()
+              .setPin(pin, memberId)
+              .then((ok) => {
+                setBusy(false);
+                if (ok) setPin("");
+              });
+          }}
+        >
+          <input
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            aria-label="New family PIN"
+            placeholder="New PIN"
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+            className="h-12 min-w-0 flex-1 rounded-xl bg-paper-2 px-4 text-[16px] tracking-[0.3em] outline-none"
+          />
+          <button
+            type="submit"
+            disabled={!valid || busy}
+            className="press h-12 rounded-xl bg-ink px-5 text-[14px] font-semibold text-white disabled:opacity-40"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </form>
+      </Card>
+    </>
+  );
+}
+
 function MoreTab({ snapshot, me, run, setMe }: TabProps & { setMe: (id: string) => void }) {
   const byId = new Map(snapshot.members.map((m) => [m.id, m]));
   const pending = snapshot.redemptions.filter((r) => r.status === "requested");
@@ -583,6 +633,8 @@ function MoreTab({ snapshot, me, run, setMe }: TabProps & { setMe: (id: string) 
           </Card>
         </>
       )}
+
+      {me.role === "adult" && <PinCard memberId={me.id} />}
 
       <H>Signed in as (demo switch)</H>
       <div className="flex gap-2">

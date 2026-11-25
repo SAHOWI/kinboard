@@ -1,5 +1,8 @@
 import { useState } from "react";
 
+/** The dev/demo default PIN is shown only in dev and demo builds, never in production. */
+const SHOW_DEV_HINT = import.meta.env.DEV || import.meta.env.VITE_DEMO === "1";
+
 /** Adult PIN entry (FR-HH-08). The PIN is checked by the server (`POST /pin/verify`), never in the UI. */
 export function PinPad({
   verify,
@@ -33,7 +36,8 @@ export function PinPad({
       <div className="text-[44px] mb-1">🔒</div>
       <h2 className="font-display text-[28px] font-semibold tracking-tight">Grown-ups only</h2>
       <p className="text-ink-2 mt-1 mb-6 text-[16px]">
-        Enter the family PIN to make changes <span className="text-muted">(demo: 1234)</span>
+        Enter the family PIN to make changes
+        {SHOW_DEV_HINT && <span className="text-muted"> (dev default: 1234)</span>}
       </p>
       <div className={`mb-7 flex gap-4 ${error ? "animate-[kb-pop_300ms]" : ""}`}>
         {[0, 1, 2, 3].map((i) => (

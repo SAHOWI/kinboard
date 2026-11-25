@@ -280,3 +280,16 @@ export const commandReceipt = pgTable(
   },
   (t) => [primaryKey({ columns: [t.householdId, t.commandId] })],
 );
+
+/** Failed adult-PIN attempts per device identity, plus scope "*" for the whole household (gap #2). */
+export const pinAttempt = pgTable(
+  "pin_attempt",
+  {
+    householdId: householdId(),
+    scope: text("scope").notNull(),
+    failures: integer("failures").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.householdId, t.scope] })],
+);

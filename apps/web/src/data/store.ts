@@ -24,6 +24,8 @@ interface Store {
   /** Checks the adult PIN with the backend. Resolves to the elevation lifetime in ms, or null. */
   verifyPin(pin: string): Promise<number | null>;
   lock(): void;
+  /** Sets the household PIN as this adult. Toasts the outcome; true on success. */
+  setPin(pin: string, memberId: string): Promise<boolean>;
   toast(text: string, tone?: Toast["tone"]): void;
 }
 
@@ -84,6 +86,19 @@ export const useStore = create<Store>((set, get) => ({
 
   lock() {
     get().backend?.lock();
+  },
+
+  async setPin(pin, memberId) {
+    const backend = get().backend;
+    if (!backend) return false;
+    try {
+      await backend.setPin(pin, memberId);
+      get().toast("Family PIN updated", "success");
+      return true;
+    } catch (e) {
+      get().toast((e as Error).message, "error");
+      return false;
+    }
   },
 
   toast(text, tone = "info") {

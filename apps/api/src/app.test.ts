@@ -158,6 +158,40 @@ describe("API", () => {
     expect((await verifyPin(app, "1234")).statusCode).toBe(403);
   });
 
+  it("lets only an adult on the app change the PIN (FR-HH-08)", async () => {
+    const repo = new InMemoryRepository();
+    const app = buildApp(repo, { pin: "2468" });
+    const setPin = (token: string, pin: unknown) =>
+      app.inject({ method: "PUT", url: "/api/v1/pin", headers: auth(token), payload: { pin } });
+    const { token } = (await verifyPin(app, "2468")).json();
+
+    expect((await setPin(MIA, "9753")).statusCode).toBe(403);
+    expect((await setPin(DISPLAY, "9753")).statusCode).toBe(403);
+    expect((await setPin(ANNA, "12")).statusCode).toBe(400);
+    expect((await setPin(ANNA, 9753)).statusCode).toBe(400);
+    expect((await setPin(ANNA, "9753")).statusCode).toBe(204);
+
+    expect(await repo.getPinHash("hh_1")).toMatch(/^\$argon2id\$/);
+    expect((await send(app, DISPLAY, deleteDentist, token)).statusCode).toBe(403); // old elevation revoked
+    expect((await verifyPin(app, "2468")).statusCode).toBe(401);
+    expect((await verifyPin(app, "9753")).statusCode).toBe(200);
+  });
+
+  it("keeps a changed PIN and the lockout across restarts", async () => {
+    const repo = new InMemoryRepository();
+    const first = buildApp(repo, { pin: "2468" });
+    await first.inject({ method: "PUT", url: "/api/v1/pin", headers: auth(ANNA), payload: { pin: "9753" } });
+    for (let i = 0; i < 5; i++) expect((await verifyPin(first, "1111")).statusCode).toBe(401);
+    await first.close();
+
+    let clock = Date.now();
+    const second = buildApp(repo, { pin: "2468", now: () => clock }); // same storage, initial PIN ignored
+    expect((await verifyPin(second, "9753")).statusCode).toBe(429);
+    clock += 60_001;
+    expect((await verifyPin(second, "2468")).statusCode).toBe(401);
+    expect((await verifyPin(second, "9753")).statusCode).toBe(200);
+  });
+
   it("broadcasts the server's resulting changes and closes unauthenticated sockets", async () => {
     const app = make();
     await app.ready();

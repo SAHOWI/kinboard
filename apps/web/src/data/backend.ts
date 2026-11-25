@@ -15,10 +15,13 @@ export interface Backend extends Transport {
   verifyPin(pin: string): Promise<number | null>;
   /** Drops the display's elevation. */
   lock(): void;
+  /** An adult on the app sets the household PIN (FR-HH-08). Throws with the server's message. */
+  setPin(pin: string, memberId: string): Promise<void>;
 }
 
 const PIN_TTL_MS = 5 * 60_000;
 const DEMO_PIN = "1234";
+const PIN_FORMAT = /^\d{4,8}$/;
 
 /**
  * TEMPORARY identity until auth and device pairing land (M2 steps 3 and 5): unsigned dev tokens that the API
@@ -101,6 +104,15 @@ export class RemoteBackend implements Backend {
 
   lock() {
     this.elevation = undefined;
+  }
+
+  async setPin(pin: string, memberId: string) {
+    const r = await fetch(`${this.base}/api/v1/pin`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${devToken("app", memberId)}` },
+      body: JSON.stringify({ pin }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
   }
 
   subscribe(onBatch: (b: ChangeBatch) => void, onOpen: () => void) {
@@ -204,12 +216,21 @@ export class DemoBackend implements Backend {
     return () => this.listeners.delete(onBatch);
   }
 
+  private pin = DEMO_PIN;
+
   /** No server in demo mode, so the PIN is checked here. Never used against a real API. */
   async verifyPin(pin: string) {
-    return pin === DEMO_PIN ? PIN_TTL_MS : null;
+    return pin === this.pin ? PIN_TTL_MS : null;
   }
 
   lock() {}
+
+  async setPin(pin: string, memberId: string) {
+    if (this.state.members.find((m) => m.id === memberId)?.role !== "adult")
+      throw new Error("Only an adult in the app can change the PIN");
+    if (!PIN_FORMAT.test(pin)) throw new Error("The PIN must be 4–8 digits");
+    this.pin = pin;
+  }
 }
 
 export function createBackend(device: "display" | "app"): Backend & { cacheKey?: string } {

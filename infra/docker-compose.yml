@@ -20,6 +20,7 @@ services:
     environment:
       DATABASE_URL: postgres://kinboard:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}@postgres:5432/kinboard
       KINBOARD_MASTER_KEY: ${KINBOARD_MASTER_KEY:?set a 32-byte base64 key}
+      KINBOARD_PIN: ${KINBOARD_PIN:-} # optional initial adult PIN
     depends_on:
       postgres: { condition: service_healthy }
     restart: unless-stopped
