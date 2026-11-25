@@ -48,6 +48,36 @@ describe("API", () => {
     expect(anna.lists.some((l: { hidden: boolean }) => l.hidden)).toBe(true);
   });
 
+  it("sends hidden lists only to members in visibleTo (gap #3, FR-LST-04)", async () => {
+    const app = make();
+    const mia = (await app.inject({ url: "/api/v1/snapshot", headers: auth(MIA) })).json();
+    expect(mia.lists.some((l: { id: string }) => l.id === "l_gifts")).toBe(false);
+    expect(mia.items.some((i: { listId: string }) => i.listId === "l_gifts")).toBe(false);
+  });
+
+  it("fans realtime events out per viewer, without leaking hidden-list activity (gaps #3, #7)", async () => {
+    const app = make();
+    await app.ready();
+    const listen = async (token: string) => {
+      const ws = await app.injectWS(`/api/v1/realtime?token=${token}`);
+      const events: { type: string }[] = [];
+      ws.on("message", (m) => events.push(JSON.parse(m.toString())));
+      return { ws, events };
+    };
+    const [tom, mia, display] = [await listen("dev:app:m_tom"), await listen(MIA), await listen(DISPLAY)];
+    const item = { id: "i_secret", listId: "l_gifts", text: "Bike", checked: false, sort: 1 };
+    expect((await send(app, ANNA, { type: "item.add", item })).statusCode).toBe(200);
+    expect((await send(app, ANNA, { type: "item.remove", itemId: "i_secret" })).statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(tom.events.map((e) => e.type)).toEqual(["applied", "applied"]);
+    expect(mia.events.map((e) => e.type)).toEqual(["rev", "rev"]);
+    expect(display.events.map((e) => e.type)).toEqual(["rev", "rev"]);
+    expect(JSON.stringify([...mia.events, ...display.events])).not.toContain("i_secret");
+    for (const c of [tom, mia, display]) c.ws.terminate();
+    await app.close();
+  });
+
   it("applies commands idempotently and enforces permissions", async () => {
     const app = make();
     const body = {

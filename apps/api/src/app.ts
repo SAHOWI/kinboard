@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { Command, DomainError, projectForDisplay } from "@kinboard/shared";
+import { Command, DomainError, canSeeList, hiddenListOf, projectForMember } from "@kinboard/shared";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { type Identity, PinGate, actorFor, bearerToken, parseDevToken } from "./auth.ts";
@@ -43,12 +43,12 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
 
   app.get("/health", async () => ({ ok: true }));
 
-  /** Full snapshot. Display identities get the projection without hidden lists (spec §9). */
+  /** Full snapshot, projected per viewer: hidden lists reach only members in `visibleTo` (spec §9, gap #3). */
   app.get("/api/v1/snapshot", async (req, reply) => {
     const id = await identify(req);
     if (!id) return problem(reply, 401, "unauthorized");
     const s = await repo.snapshot(HOUSEHOLD);
-    return id.device === "display" ? projectForDisplay(s) : s;
+    return projectForMember(s, id.memberId); // displays are memberId null → no hidden lists
   });
 
   /** Adult PIN on a shared display → short-lived elevation token for `x-kinboard-elevation`. */
@@ -68,11 +68,11 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
   app.post("/api/v1/commands", async (req, reply) => {
     const id = await identify(req);
     if (!id) return problem(reply, 401, "unauthorized");
-    const state = await repo.snapshot(HOUSEHOLD);
+    const before = await repo.snapshot(HOUSEHOLD);
     const elevation = req.headers["x-kinboard-elevation"];
     const actor = actorFor(
       id,
-      state,
+      before,
       pins.isElevated(id, typeof elevation === "string" ? elevation : undefined),
     );
     const body = typeof req.body === "object" && req.body !== null ? req.body : {};
@@ -84,23 +84,13 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
       if (!replay) {
         const c = parsed.data;
         const msg = JSON.stringify({ type: "applied", rev: state.rev, command: c });
-        // Never leak hidden-list activity to shared displays; they resync via /snapshot.
-        const listId =
-          c.type === "item.add"
-            ? c.item.listId
-            : c.type === "list.add"
-              ? c.list.id
-              : c.type === "item.toggle" || c.type === "item.remove"
-                ? state.items.find((i) => i.id === c.itemId)?.listId
-                : undefined;
-        const touchesHidden = !!listId && !!state.lists.find((l) => l.id === listId)?.hidden;
+        // Viewers who may not see the touched hidden list only learn that something changed and
+        // resync their projected /snapshot. Resolved on the state before the command (gap #7).
+        const hidden = hiddenListOf(before, c);
+        const bump = JSON.stringify({ type: "rev", rev: state.rev });
         for (const s of sockets) {
           if (s.ws.readyState !== 1) continue;
-          s.ws.send(
-            touchesHidden && s.identity.device === "display"
-              ? JSON.stringify({ type: "rev", rev: state.rev })
-              : msg,
-          );
+          s.ws.send(hidden && !canSeeList(hidden, s.identity.memberId) ? bump : msg);
         }
       }
       return { rev: state.rev, replay };

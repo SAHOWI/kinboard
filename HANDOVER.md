@@ -33,13 +33,13 @@ must be robust and OSI-licensed open source. Proprietary services (APNs/FCM, Goo
 
 ## 2. Current state (what exists and works)
 
-Verified on 2026-11-25: `pnpm test` (23 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
-display and app in two browsers against the live API sync in real time ✅ · hidden lists never reach the display ✅.
+Verified on 2026-11-25: `pnpm test` (26 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
+display and app in two browsers against the live API sync in real time ✅ · hidden lists reach only members in `visibleTo` and never the display ✅.
 
 | Area | Status |
 |---|---|
-| `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 12 tests |
-| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `POST /api/v1/pin/verify`, `WS /api/v1/realtime`, **in-memory** repository. The server builds the `Actor` from a **temporary dev token** (see gap #1). 11 tests |
+| `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 13 tests |
+| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `POST /api/v1/pin/verify`, `WS /api/v1/realtime`, **in-memory** repository. The server builds the `Actor` from a **temporary dev token** (see gap #1). 13 tests |
 | `apps/web` | React 19 + Vite 6 + Tailwind 4 + Zustand. Routes: `#/` studio (side by side), `#/display`, `#/app`. Demo backend (no server) with BroadcastChannel tab sync. Falls back to demo mode automatically if the API is unreachable |
 | `apps/mobile` | Capacitor 7 config only. **Native projects not generated; never built** |
 | `infra/` | docker-compose (Postgres provisioned but **unused**), Caddyfile, Pi kiosk systemd unit. **Not tested end to end** |
@@ -75,7 +75,7 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 **Invariants (do not break):**
 1. **All state changes go through a `Command`** in `packages/shared/src/types.ts`, and **one pure reducer** in `reducer.ts`. There are no ad-hoc mutations in the API or UI.
 2. **Permissions live in the reducer** (`isAllowed`). UI checks are convenience only. Children may only run `task.complete/uncomplete`, `item.add/toggle` (on non-hidden lists) and `reward.request`.
-3. **Hidden lists never reach a display.** This is enforced server-side (`projectForDisplay` + WS filtering in `app.ts`).
+3. **Hidden lists reach only members in `visibleTo`, never a display.** This is enforced server-side: `projectForMember` on `/snapshot`, per-viewer WS fan-out (`rev` instead of the command) in `app.ts`, and the reducer treats a hidden list the actor can't see as `not_found`.
 4. **Shells never use viewport units or `position: fixed`.** The studio view renders both shells scaled inside boxes. Modals are `absolute` inside the shell.
 5. **The reducer is deterministic.** Ids and timestamps come in on the command, not from `Date.now()` inside the reducer.
 6. **New dependencies must be OSI-licensed and mature.** Record the licence in spec §2.2 when you add one.
@@ -86,11 +86,11 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 |---|---|---|---|---|
 | 1 | 🔴 Security | **The actor is trusted from the client.** Anyone can send `elevated: true` | `app.ts`, `auth.ts` | ✅ **Fixed 2026-11-25.** The server builds the Actor and ignores the client's. Identity comes from unsigned dev tokens (`Bearer dev:display`, `dev:app:<memberId>`, `?token=` on the WebSocket), which anyone can forge, so they are refused when `NODE_ENV=production` unless `KINBOARD_DEV_AUTH=1`. Display elevation needs a server-issued PIN token. **Remaining:** replace dev tokens with better-auth sessions and device tokens (M2 steps 3 and 5) |
 | 2 | 🔴 Security | The PIN is checked client-side (`"1234"` hard-coded) | `auth.ts` | 🟡 **Partly fixed 2026-11-25.** `POST /pin/verify` checks it server-side (constant-time compare, 5 failures → 60 s lockout) and returns a 5-min elevation token (`x-kinboard-elevation`). The PIN comes from `KINBOARD_PIN` (`1234` only with dev auth). **Remaining:** Argon2id hash on the household, persisted lockout (M2) |
-| 3 | 🔴 Privacy | App clients receive **all** hidden lists, not only those where they are in `visibleTo` | `GET /snapshot` | Add `projectForMember(state, memberId)` and apply it to snapshot and WS (M2) |
+| 3 | 🔴 Privacy | App clients receive **all** hidden lists, not only those where they are in `visibleTo` | `reducer.ts`, `app.ts` | ✅ **Fixed 2026-11-25.** `projectForMember(state, memberId)` on snapshot and realtime. Commands on a hidden list the actor can't see fail with `not_found` |
 | 4 | 🟠 Data | In-memory repository, so data is lost on restart. Single hard-coded household `hh_1` | `repository.ts` | Drizzle + Postgres, `change_log`, LISTEN/NOTIFY (M2) |
 | 5 | 🟠 Sync | No `GET /sync?since=rev`. Reconnect does a full snapshot. No offline outbox | `backend.ts` | Implement spec §5.3 (M2) |
 | 6 | 🟠 Sync | The idempotency `Set` grows forever | `repository.ts` | Table with a TTL (M2) |
-| 7 | 🟡 Leak | `item.remove` on a hidden list sends its item id to displays (the item is already gone, so the list can't be resolved) | `app.ts` broadcast | Resolve the list before applying, or always send `rev` for removals |
+| 7 | 🟡 Leak | `item.remove` on a hidden list sent its item id to displays | `app.ts` broadcast | ✅ **Fixed 2026-11-25.** The touched list is resolved before the command is applied (`hiddenListOf`) |
 | 8 | 🟡 Time | Recurrence uses the "floating time" trick with browser-local time. Household timezone is ignored | `selectors.ts` | Expand in `household.timezone` using `@date-fns/tz` |
 | 9 | 🟡 UX | Display time grid is fixed at 07:00–22:00. Home routine card has empty space when there are few tasks | `CalendarView.tsx`, `HomeView.tsx` | Auto-range. Show upcoming chores |
 | 10 | 🟡 Mocks | Weather, connected calendars, pairing QR (fake pattern), and the "signed in as" switch in the app are mock-ups | various | Replace in M2/M3 |
@@ -114,7 +114,7 @@ Do these in order. Each step should be a separate PR (or commit) with tests.
 3. **Auth.** better-auth (e-mail/password + magic link), sessions, `users ↔ members` link. **The server builds the `Actor`.** Remove `actor` from the client payload (fixes gap #1).
 4. **Adult PIN.** Hashed PIN, `POST /pin/verify` returning an elevated token valid for 5 min, rate limiting (gap #2).
 5. **Device pairing.** Device-code flow (spec §5.2): the display shows a QR code and short code, the app claims it, and the display receives a revocable device token. Remote revoke (FR-HH-05, FR-HH-07).
-6. **Per-member projection** for hidden lists (gap #3), applied to both snapshot and realtime.
+6. ~~**Per-member projection** for hidden lists (gap #3), applied to both snapshot and realtime.~~ Done 2026-11-25.
 7. **Delta sync and offline outbox.** `GET /sync?since`, an IndexedDB outbox with replay, TanStack Query persistence (spec §5.3, NFR-05).
 8. **Household creation and member management** (FR-HH-01…04).
 

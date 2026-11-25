@@ -251,7 +251,7 @@ Members with the `child` role act on the display without a PIN only for **comple
 ## 9. Security and privacy
 
 - Threat model (STRIDE) per release. Main risks: device theft (mitigation: revocation and remote wipe), OAuth token leakage (mitigation: encryption at rest and minimal scopes such as `calendar.events` only), child data exposure (mitigation: no analytics and hidden lists filtered server-side for display tokens).
-- Hidden lists are **filtered server-side** for display tokens. The client never receives them.
+- Hidden lists are **filtered server-side per viewer** (`projectForMember`): only members in `visibleTo` receive them, displays never do. Realtime events touching a hidden list reach other viewers only as `{type:"rev"}`, and commands on a hidden list the actor can't see fail with `not_found`, so its existence is not revealed.
 - Rate limiting with `@fastify/rate-limit`, CSP headers, and SameSite cookies for web sessions.
 - GDPR: a record of processing activities, DPA template for hosted service, export and delete endpoints, data retention (completions > 13 months are aggregated).
 

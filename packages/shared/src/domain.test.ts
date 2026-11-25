@@ -11,6 +11,7 @@ import {
   memberProgress,
   occurrences,
   projectForDisplay,
+  projectForMember,
 } from "./index.ts";
 
 const NOW = new Date(2026, 10, 25, 7, 30); // Wed 25 Nov 2026
@@ -52,6 +53,39 @@ describe("permissions (child mode)", () => {
   it("children cannot toggle items on hidden lists", () => {
     const s0 = createSeed(NOW);
     expect(() => applyCommand(s0, cmd({ type: "item.toggle", itemId: "i_g0" }))).toThrow(DomainError);
+  });
+
+  it("hidden lists reach only members in visibleTo (FR-LST-04)", () => {
+    const s0 = createSeed(NOW);
+    const s = {
+      ...s0,
+      lists: s0.lists.map((l) => (l.id === "l_gifts" ? { ...l, visibleTo: ["m_tom"] } : l)),
+    };
+    const sees = (memberId: string | null) =>
+      projectForMember(s, memberId).lists.some((l) => l.id === "l_gifts");
+    expect([sees("m_tom"), sees("m_anna"), sees("m_mia"), sees(null)]).toEqual([true, false, false, false]);
+    expect(projectForMember(s, "m_anna").items.some((i) => i.listId === "l_gifts")).toBe(false);
+
+    const anna: Actor = { memberId: "m_anna", elevated: true, device: "app" };
+    const tom: Actor = { memberId: "m_tom", elevated: true, device: "app" };
+    const remove = { type: "item.remove", itemId: "i_g0" } as const;
+    expect(() => applyCommand(s, cmd(remove, anna))).toThrow(/not_found|list/);
+    expect(() => applyCommand(s, cmd(remove, { ...anna, memberId: null, device: "display" }))).toThrow(
+      DomainError,
+    );
+    expect(applyCommand(s, cmd(remove, tom)).items.some((i) => i.id === "i_g0")).toBe(false);
+
+    const secret = {
+      id: "l_x",
+      name: "Secret",
+      icon: "🎁",
+      kind: "generic",
+      hidden: true,
+      visibleTo: ["m_tom"],
+    };
+    expect(() => applyCommand(s, cmd({ type: "list.add", list: secret } as CommandInput, anna))).toThrow(
+      DomainError,
+    );
   });
 
   it("display projection strips hidden lists", () => {

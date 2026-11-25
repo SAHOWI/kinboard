@@ -1,5 +1,5 @@
 import { parseLocal, tasksForDay } from "./selectors.ts";
-import type { Command, Snapshot, Task } from "./types.ts";
+import type { Command, List, Snapshot, Task } from "./types.ts";
 
 export class DomainError extends Error {
   constructor(
@@ -29,14 +29,8 @@ export function isAllowed(state: Snapshot, cmd: Command): boolean {
       cmd.actor.memberId !== cmd.memberId
     )
       return false;
-    // Children may not touch hidden lists.
-    if (cmd.type === "item.toggle" || cmd.type === "item.add") {
-      const listId =
-        cmd.type === "item.add" ? cmd.item.listId : state.items.find((i) => i.id === cmd.itemId)?.listId;
-      const list = state.lists.find((l) => l.id === listId);
-      if (list?.hidden) return false;
-    }
-    return true;
+    // Children may not touch hidden lists, even ones they can see.
+    return !hiddenListOf(state, cmd);
   }
   // Signed-in adults (app) are elevated by definition; everything else needs the PIN.
   const actor = state.members.find((m) => m.id === cmd.actor.memberId);
@@ -82,6 +76,9 @@ export function balanceOf(state: Snapshot, memberId: string): number {
  * Returns a NEW snapshot with rev + 1. Throws DomainError on rejection.
  */
 export function applyCommand(state: Snapshot, cmd: Command): Snapshot {
+  // A hidden list the actor may not see behaves as if it did not exist (FR-LST-04).
+  const hidden = hiddenListOf(state, cmd);
+  if (hidden && !canSeeList(hidden, cmd.actor.memberId)) throw new DomainError("not_found", "list");
   if (!isAllowed(state, cmd)) throw new DomainError("forbidden", `${cmd.type} requires adult PIN`);
   const s: Snapshot = structuredClone(state);
   s.rev = state.rev + 1;
@@ -200,10 +197,37 @@ export function applyCommand(state: Snapshot, cmd: Command): Snapshot {
 
 /** Server-side projection for shared display tokens: hidden lists never leave the server (spec §9). */
 export function projectForDisplay(state: Snapshot): Snapshot {
-  const hidden = new Set(state.lists.filter((l) => l.hidden).map((l) => l.id));
+  return projectForMember(state, null);
+}
+
+/** Who may see a list: everyone for normal lists, only `visibleTo` members for hidden ones. Displays are `null`. */
+export function canSeeList(list: List, memberId: string | null): boolean {
+  return !list.hidden || (memberId !== null && list.visibleTo.includes(memberId));
+}
+
+/** Server-side projection per viewer: hidden lists and their items reach only members in `visibleTo` (gap #3). */
+export function projectForMember(state: Snapshot, memberId: string | null): Snapshot {
+  const invisible = new Set(state.lists.filter((l) => !canSeeList(l, memberId)).map((l) => l.id));
+  if (!invisible.size) return state;
   return {
     ...state,
-    lists: state.lists.filter((l) => !hidden.has(l.id)),
-    items: state.items.filter((i) => !hidden.has(i.listId)),
+    lists: state.lists.filter((l) => !invisible.has(l.id)),
+    items: state.items.filter((i) => !invisible.has(i.listId)),
   };
+}
+
+/**
+ * The hidden list a command touches, resolved against the state BEFORE the command
+ * (after an `item.remove` the item, and with it the list, can no longer be found).
+ */
+export function hiddenListOf(state: Snapshot, cmd: Command): List | undefined {
+  if (cmd.type === "list.add") return cmd.list.hidden ? cmd.list : undefined;
+  const listId =
+    cmd.type === "item.add"
+      ? cmd.item.listId
+      : cmd.type === "item.toggle" || cmd.type === "item.remove"
+        ? state.items.find((i) => i.id === cmd.itemId)?.listId
+        : undefined;
+  const list = listId ? state.lists.find((l) => l.id === listId) : undefined;
+  return list?.hidden ? list : undefined;
 }
