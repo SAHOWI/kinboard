@@ -79,6 +79,67 @@ describe("rewards", () => {
   });
 });
 
+describe("crafted commands (FR-TSK-03, FR-RWD-01, FR-RWD-03)", () => {
+  const display: Actor = { memberId: null, elevated: false, device: "display" };
+  const complete = (memberId: string, date: string, taskId = "t_bed") =>
+    ({ type: "task.complete", taskId, memberId, date }) as const;
+
+  it("rejects completing a task for a member it is not assigned to", () => {
+    const s0 = createSeed(NOW);
+    expect(() => applyCommand(s0, cmd(complete("m_ben", dateKey(NOW)), display))).toThrow(/not assigned/);
+    expect(() => applyCommand(s0, cmd(complete("m_ben", dateKey(NOW)), parent))).toThrow(/not assigned/);
+  });
+
+  it("rejects dates the task does not occur on, or that are malformed", () => {
+    const s0 = createSeed(NOW);
+    expect(() => applyCommand(s0, cmd(complete("m_mia", "2026-11-28"), parent))).toThrow(/not due/); // Sat
+    expect(() => applyCommand(s0, cmd(complete("m_mia", "2026-11-25-1"), parent))).toThrow(/date/);
+  });
+
+  it("children cannot farm points with past or future dates; adults may backfill", () => {
+    const s0 = createSeed(NOW);
+    expect(() => applyCommand(s0, cmd(complete("m_mia", "2026-11-20")))).toThrow(/today/);
+    expect(() => applyCommand(s0, cmd(complete("m_mia", "2026-11-27")))).toThrow(/today/);
+    expect(balanceOf(applyCommand(s0, cmd(complete("m_mia", "2026-11-20"), parent)), "m_mia")).toBe(100);
+  });
+
+  it("a signed-in child cannot act for a sibling", () => {
+    const s0 = createSeed(NOW);
+    const args = { taskId: "t_teeth_am", memberId: "m_ben", date: dateKey(NOW) };
+    expect(() => applyCommand(s0, cmd({ type: "task.complete", ...args }))).toThrow(DomainError);
+    expect(() =>
+      applyCommand(
+        s0,
+        cmd({ type: "reward.request", redemptionId: "rd1", rewardId: "rw_movie", memberId: "m_ben" }),
+      ),
+    ).toThrow(DomainError);
+    expect(applyCommand(s0, cmd({ type: "task.complete", ...args }, display)).completions).toHaveLength(1);
+  });
+
+  it("rejects unknown members and duplicate entity ids", () => {
+    const s0 = createSeed(NOW);
+    expect(() =>
+      applyCommand(
+        s0,
+        cmd({ type: "reward.request", redemptionId: "rd1", rewardId: "rw_movie", memberId: "m_x" }, display),
+      ),
+    ).toThrow(/member/);
+    const dentist = s0.events.find((e) => e.id === "e_dentist");
+    if (!dentist) throw new Error("seed changed");
+    expect(() => applyCommand(s0, cmd({ type: "event.add", event: dentist }, parent))).toThrow(/duplicate/);
+    const s1 = applyCommand(
+      s0,
+      cmd({ type: "reward.request", redemptionId: "rd1", rewardId: "rw_movie", memberId: "m_mia" }),
+    );
+    expect(() =>
+      applyCommand(
+        s1,
+        cmd({ type: "reward.request", redemptionId: "rd1", rewardId: "rw_movie", memberId: "m_mia" }),
+      ),
+    ).toThrow(/duplicate/);
+  });
+});
+
 describe("recurrence", () => {
   it("expands weekly school events Mon–Fri only", () => {
     const s = createSeed(NOW);

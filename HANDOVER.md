@@ -33,13 +33,13 @@ must be robust and OSI-licensed open source. Proprietary services (APNs/FCM, Goo
 
 ## 2. Current state (what exists and works)
 
-Verified on 2026-11-25: `pnpm test` (10 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
+Verified on 2026-11-25: `pnpm test` (16 tests) ✅ · `pnpm typecheck` ✅ · `pnpm lint` ✅ · `pnpm build` and `pnpm build:demo` ✅ ·
 display and app in two browsers against the live API sync in real time ✅ · hidden lists never reach the display ✅.
 
 | Area | Status |
 |---|---|
-| `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 7 tests |
-| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `WS /api/v1/realtime`, **in-memory** repository, 3 tests |
+| `packages/shared` | Zod schemas, the command reducer with permissions, recurrence (rrule), selectors, seed data, 12 tests |
+| `apps/api` | Fastify: `GET /api/v1/snapshot`, `POST /api/v1/commands` (idempotent, RFC 9457 errors), `WS /api/v1/realtime`, **in-memory** repository, 4 tests |
 | `apps/web` | React 19 + Vite 6 + Tailwind 4 + Zustand. Routes: `#/` studio (side by side), `#/display`, `#/app`. Demo backend (no server) with BroadcastChannel tab sync. Falls back to demo mode automatically if the API is unreachable |
 | `apps/mobile` | Capacitor 7 config only. **Native projects not generated; never built** |
 | `infra/` | docker-compose (Postgres provisioned but **unused**), Caddyfile, Pi kiosk systemd unit. **Not tested end to end** |
@@ -57,7 +57,7 @@ pnpm dev:demo       # web only, in-browser backend
 pnpm test && pnpm typecheck && pnpm lint      # must all pass before every commit
 ```
 
-The folder is **not yet a git repo**. First step: `git init && git add -A && git commit -m "chore: import M1 MVP"`.
+Git was initialised on 2026-11-25 (`main`, import commit `chore: import M1 MVP`). `.gitattributes` keeps LF endings for Biome, and the generated `apps/web/dist-demo` is ignored.
 
 ## 4. Architecture you must preserve
 
@@ -97,6 +97,12 @@ UI action ──► CommandInput + Actor ──► store.dispatch()
 | 11 | 🟢 Size | The single-file demo build inlines every font subset (~840 KB) | `styles/index.css` | Import latin subsets only |
 | 12 | 🟢 Infra | Dockerfile and compose are untested. Caddy expects a prebuilt `apps/web/dist` | `infra/` | Multi-stage web image, CI smoke test |
 | 13 | 🟢 Tests | No component or E2E tests for the web app | `apps/web` | Testing Library + Playwright (two contexts for realtime) |
+| 14 | 🔴 Security | `task.complete` and `reward.request` could be crafted to farm points: unassigned members, invented or past dates, a child acting for a sibling, unknown members | `reducer.ts` | ✅ **Fixed 2026-11-25.** The task must be assigned and due that day, and without the PIN the date must be within ±1 day of `cmd.at`. A signed-in child acts only for themself. Tests in `domain.test.ts` and `app.test.ts` |
+| 15 | 🟠 Data | `*.add` commands accepted duplicate entity ids | `reducer.ts` | ✅ **Fixed 2026-11-25.** They are rejected with `invalid` |
+| 16 | 🟠 Security | The date window trusts the client's `cmd.at` | `app.ts` | The server should stamp `at` when it builds the Actor (gap #1). This changes the sync protocol, so ask first |
+| 17 | 🟠 Sync | `resync()` clears `pending`. An own echo arriving afterwards is applied twice (`item.toggle` flips back, `item.add` duplicates). Clients never compare `rev` | `store.ts` | Keep pending ids until echoed, and resync on a rev gap (with M2 step 7) |
+| 18 | 🟡 Security | CORS allows every origin (`origin: true`) while there is no auth | `app.ts` | Restrict to configured origins (M2 auth) |
+| 19 | 🟡 Infra | No `.dockerignore` (`COPY . .` copies `node_modules`). Compose requires `KINBOARD_MASTER_KEY`, which nothing reads. The API runs via `tsx` in production | `infra/`, `apps/api/Dockerfile` | Fix together with #12 |
 | — | Open decision | **Licence.** AGPL-3.0 is set for now; Apache-2.0 is the alternative | `package.json` | Ask Holger before release |
 
 ## 6. Next milestone: M2 work plan

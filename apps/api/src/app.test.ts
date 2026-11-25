@@ -37,6 +37,16 @@ describe("API", () => {
     expect(forbidden.statusCode).toBe(403);
   });
 
+  it("rejects crafted point-farming requests (FR-TSK-03, FR-RWD-01)", async () => {
+    const app = buildApp();
+    const base = { at: new Date().toISOString(), actor, type: "task.complete", taskId: "t_bed" };
+    const send = (payload: object) => app.inject({ method: "POST", url: "/api/v1/commands", payload });
+    const sibling = await send({ ...base, id: "f-1", memberId: "m_ben", date: dateKey(new Date()) });
+    const pastDay = await send({ ...base, id: "f-2", memberId: "m_mia", date: "2020-01-06" });
+    expect(sibling.statusCode).toBe(403);
+    expect(pastDay.statusCode).toBe(422);
+  });
+
   it("rejects malformed commands with problem+json", async () => {
     const res = await buildApp().inject({
       method: "POST",

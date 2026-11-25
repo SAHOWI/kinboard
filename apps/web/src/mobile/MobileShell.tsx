@@ -6,6 +6,7 @@ import {
   dateKey,
   isDone,
   memberProgress,
+  newId,
   occurrences,
   startOfDay,
   tasksForDay,
@@ -471,7 +472,7 @@ function ListsTab({ snapshot, run, lists }: TabProps & { lists: Snapshot["lists"
             void run({
               type: "item.add",
               item: {
-                id: `i_${Date.now()}`,
+                id: newId("i"),
                 listId: list.id,
                 text: text.trim(),
                 checked: false,
