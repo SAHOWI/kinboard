@@ -1,4 +1,5 @@
-# Self-hosted Kinboard: `docker compose -f infra/docker-compose.yml up -d --build`
+# Self-hosted Kinboard: `cp infra/.env.example infra/.env`, fill in the secrets, then
+# `docker compose -f infra/docker-compose.yml up -d --build`. Compose refuses to start without them.
 # MVP note: the API still uses its in-memory repository. Postgres is provisioned now
 # so milestone M2 (Drizzle + pg-boss) can switch over without changing the infrastructure.
 services:
@@ -7,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: kinboard
       POSTGRES_USER: kinboard
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kinboard"]
@@ -17,7 +18,7 @@ services:
   api:
     build: { context: .., dockerfile: apps/api/Dockerfile }
     environment:
-      DATABASE_URL: postgres://kinboard:${POSTGRES_PASSWORD:-change-me}@postgres:5432/kinboard
+      DATABASE_URL: postgres://kinboard:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}@postgres:5432/kinboard
       KINBOARD_MASTER_KEY: ${KINBOARD_MASTER_KEY:?set a 32-byte base64 key}
     depends_on:
       postgres: { condition: service_healthy }
