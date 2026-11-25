@@ -1,7 +1,65 @@
-node_modules
-dist
+# ── Secrets: never commit ─────────────────────────────────────────────
+# Environment files anywhere in the tree. Templates stay tracked.
 .env
-*.log
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Keys, certificates, credential stores
+*.pem
+*.key
+*.crt
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+secrets/
+*.secret
+*.secrets
+credentials.json
+service-account*.json
+
+# Mobile signing and push config (Capacitor)
 apps/mobile/android
 apps/mobile/ios
+google-services.json
+GoogleService-Info.plist
+*.mobileprovision
+key.properties
+
+# Local tool settings that can hold tokens
+.claude/settings.local.json
+.npmrc.local
+.vscode/settings.local.json
+
+# Database dumps and local dev data
+*.sql.gz
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+pgdata/
+.pglite/
+caddydata/
+
+# ── Build output and dependencies ─────────────────────────────────────
+node_modules
+dist
 dist-demo
+coverage
+*.tsbuildinfo
+.turbo
+.vite
+playwright-report
+test-results
+
+# ── Logs and OS / editor clutter ──────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db
+.idea
+*.swp
