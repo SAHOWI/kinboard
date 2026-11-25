@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { Command, DomainError, canSeeList, hiddenListOf, projectForMember } from "@kinboard/shared";
+import { Command, DomainError, projectChanges, projectForMember } from "@kinboard/shared";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { type Identity, PinGate, actorFor, bearerToken, parseDevToken } from "./auth.ts";
@@ -51,6 +51,22 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
     return projectForMember(s, id.memberId); // displays are memberId null → no hidden lists
   });
 
+  /**
+   * Delta sync (spec §5.3): the changes after `since`, filtered for this viewer. `{ reset: true }` when
+   * that history is not available, in which case the client reloads `/snapshot`.
+   */
+  app.get("/api/v1/sync", async (req, reply) => {
+    const id = await identify(req);
+    if (!id) return problem(reply, 401, "unauthorized");
+    const since = Number((req.query as { since?: string }).since);
+    if (!Number.isSafeInteger(since) || since < 0)
+      return problem(reply, 400, "Invalid since", "`since` must be a non-negative integer revision");
+    const feed = await repo.changesSince(HOUSEHOLD, since);
+    if (!feed) return { reset: true };
+    const state = await repo.snapshot(HOUSEHOLD);
+    return { rev: feed.rev, changes: projectChanges(feed.changes, state, id.memberId) };
+  });
+
   /** Adult PIN on a shared display → short-lived elevation token for `x-kinboard-elevation`. */
   app.post("/api/v1/pin/verify", async (req, reply) => {
     const id = await identify(req);
@@ -80,19 +96,15 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
     const parsed = Command.safeParse({ ...body, actor });
     if (!parsed.success) return problem(reply, 400, "Invalid command", parsed.error.message);
     try {
-      const { state, replay } = await repo.apply(HOUSEHOLD, parsed.data);
-      if (!replay) {
-        const c = parsed.data;
-        const msg = JSON.stringify({ type: "applied", rev: state.rev, command: c });
-        // Viewers who may not see the touched hidden list only learn that something changed and
-        // resync their projected /snapshot. Resolved on the state before the command (gap #7).
-        const hidden = hiddenListOf(before, c);
-        const bump = JSON.stringify({ type: "rev", rev: state.rev });
+      const { state, fromRev, replay, changes } = await repo.apply(HOUSEHOLD, parsed.data);
+      // Every new revision reaches every socket, filtered per viewer. A batch may be empty (e.g. only
+      // hidden-list changes), which still advances the client's rev so it can detect gaps.
+      if (state.rev > fromRev)
         for (const s of sockets) {
           if (s.ws.readyState !== 1) continue;
-          s.ws.send(hidden && !canSeeList(hidden, s.identity.memberId) ? bump : msg);
+          const batch = projectChanges(changes, state, s.identity.memberId);
+          s.ws.send(JSON.stringify({ type: "changes", rev: state.rev, changes: batch }));
         }
-      }
       return { rev: state.rev, replay };
     } catch (e) {
       if (e instanceof DomainError) {
@@ -103,7 +115,7 @@ export function buildApp(repo: Repository = new InMemoryRepository(), opts: AppO
     }
   });
 
-  /** Realtime channel: server pushes applied commands; clients replay them through the shared reducer. */
+  /** Realtime channel: the server pushes `{ type: "changes", rev, changes }` per new revision, per viewer. */
   app.register(async (scope) => {
     scope.get("/api/v1/realtime", { websocket: true }, async (socket, req) => {
       const identity = await identify(req);

@@ -17,6 +17,7 @@ Current status and next steps are in **`HANDOVER.md`**. Requirements are in `doc
 
 ## Rules
 - Every state change is a `Command` handled by the shared reducer. Never mutate state anywhere else.
+- Clients apply the server's change batches (`applyChanges`), never other clients' commands. Commands that devices may send concurrently or replay from an offline outbox must be idempotent (set values, don't toggle).
 - Permissions belong in `isAllowed()` in the reducer. A UI check is never the only guard.
 - Hidden lists must never reach display clients. This is enforced server-side.
 - Display and mobile shells must not use `vh`/`vw` or `position: fixed`. Modals are `absolute` inside the shell.

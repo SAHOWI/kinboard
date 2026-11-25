@@ -52,7 +52,9 @@ describe("permissions (child mode)", () => {
 
   it("children cannot toggle items on hidden lists", () => {
     const s0 = createSeed(NOW);
-    expect(() => applyCommand(s0, cmd({ type: "item.toggle", itemId: "i_g0" }))).toThrow(DomainError);
+    expect(() => applyCommand(s0, cmd({ type: "item.check", itemId: "i_g0", checked: true }))).toThrow(
+      DomainError,
+    );
   });
 
   it("hidden lists reach only members in visibleTo (FR-LST-04)", () => {

@@ -118,7 +118,7 @@ export function ListsView({ snapshot }: { snapshot: Snapshot }) {
               <button
                 type="button"
                 key={i.id}
-                onClick={() => run({ type: "item.toggle", itemId: i.id })}
+                onClick={() => run({ type: "item.check", itemId: i.id, checked: !i.checked })}
                 className="press rise flex items-center gap-4 rounded-2xl px-3 py-3.5 text-left hover:bg-paper"
               >
                 <span className="h-9 w-9 shrink-0 rounded-xl border-[3px] border-line bg-white" />
@@ -134,7 +134,7 @@ export function ListsView({ snapshot }: { snapshot: Snapshot }) {
               <button
                 type="button"
                 key={i.id}
-                onClick={() => run({ type: "item.toggle", itemId: i.id })}
+                onClick={() => run({ type: "item.check", itemId: i.id, checked: !i.checked })}
                 className="press flex items-center gap-4 rounded-2xl px-3 py-3 text-left"
               >
                 <span className="pop flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ok text-[18px] font-bold text-white">

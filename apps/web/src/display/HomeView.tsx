@@ -180,7 +180,7 @@ export function HomeView({ snapshot, now }: { snapshot: Snapshot; now: Date }) {
               <button
                 type="button"
                 key={i.id}
-                onClick={() => run({ type: "item.toggle", itemId: i.id })}
+                onClick={() => run({ type: "item.check", itemId: i.id, checked: !i.checked })}
                 className="press flex items-center gap-3 rounded-xl px-2 py-2.5 text-left text-[19px] hover:bg-paper"
               >
                 <span className="h-7 w-7 shrink-0 rounded-lg border-[2.5px] border-line" />

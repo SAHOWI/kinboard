@@ -58,6 +58,7 @@ function Scaled({
 /** Side-by-side review: wall display + phone share one store, so every tap syncs live between them. */
 function Studio() {
   const mode = useStore((s) => s.backend?.mode);
+  const status = useStore((s) => s.status);
   return (
     <div className="min-h-full bg-[#e9e4d8] px-6 py-6 lg:px-10">
       <div className="mx-auto max-w-[1800px]">
@@ -74,7 +75,11 @@ function Studio() {
           <div className="flex-1" />
           <div className="flex flex-wrap items-center gap-2 text-[13px]">
             <span className="rounded-full bg-white/70 px-3 py-1.5 font-semibold text-ink-2">
-              {mode === "demo" ? "Demo data · in-browser backend" : "Connected to API"}
+              {mode === "demo"
+                ? "Demo data · in-browser backend"
+                : status === "offline"
+                  ? "API offline · changes are queued"
+                  : "Connected to API"}
             </span>
             <a href="#/display" className="rounded-full bg-ink px-4 py-1.5 font-semibold text-white">
               Open display ↗

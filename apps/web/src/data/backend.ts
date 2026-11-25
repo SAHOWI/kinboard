@@ -1,13 +1,16 @@
-import { type Actor, type Command, type Snapshot, applyCommand, createSeed } from "@kinboard/shared";
+import {
+  type Actor,
+  type ChangeBatch,
+  type Command,
+  type Snapshot,
+  applyCommand,
+  createSeed,
+  diffSnapshots,
+} from "@kinboard/shared";
+import { RejectedError, type Transport } from "./sync.ts";
 
-export type ServerEvent = { type: "applied"; rev: number; command: Command } | { type: "rev"; rev: number };
-
-/** Transport port: the UI never knows whether it talks to a real server or the in-browser demo. */
-export interface Backend {
-  readonly mode: "remote" | "demo";
-  load(): Promise<Snapshot>;
-  send(cmd: Command): Promise<void>;
-  subscribe(cb: (e: ServerEvent) => void, onReconnect: () => void): () => void;
+/** A transport plus the display's adult-PIN elevation. The UI never knows whether it talks to a server. */
+export interface Backend extends Transport {
   /** Adult PIN on the shared display. Resolves to the elevation lifetime in ms, or null for a wrong PIN. */
   verifyPin(pin: string): Promise<number | null>;
   /** Drops the display's elevation. */
@@ -36,16 +39,27 @@ export class RemoteBackend implements Backend {
     private appMember = "m_anna",
   ) {}
 
+  /** Identifies this storage/cache slot: one per server and device identity. */
+  get cacheKey() {
+    return `${this.base}|${this.token}`;
+  }
+
   private get token() {
     return devToken(this.device, this.appMember);
   }
 
-  async load() {
-    const r = await fetch(`${this.base}/api/v1/snapshot`, {
-      headers: { authorization: `Bearer ${this.token}` },
-    });
-    if (!r.ok) throw new Error(`snapshot ${r.status}`);
-    return (await r.json()) as Snapshot;
+  private async get<T>(path: string): Promise<T> {
+    const r = await fetch(`${this.base}${path}`, { headers: { authorization: `Bearer ${this.token}` } });
+    if (!r.ok) throw new Error(`${path} ${r.status}`);
+    return (await r.json()) as T;
+  }
+
+  snapshot() {
+    return this.get<Snapshot>("/api/v1/snapshot");
+  }
+
+  sync(since: number) {
+    return this.get<ChangeBatch | { reset: true }>(`/api/v1/sync?since=${since}`);
   }
 
   async send(cmd: Command) {
@@ -61,11 +75,14 @@ export class RemoteBackend implements Backend {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-    });
-    if (!r.ok) {
-      const p = await r.json().catch(() => ({}));
-      throw new Error(p.detail ?? `HTTP ${r.status}`);
-    }
+    }); // a network failure throws here and the command stays queued
+    const p = await r.json().catch(() => ({}));
+    if (r.ok) return { rev: (p as { rev: number }).rev };
+    const message = (p as { detail?: string }).detail ?? `HTTP ${r.status}`;
+    // 4xx is the server's final answer; 408, 429 and 5xx are worth retrying.
+    if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429)
+      throw new RejectedError(message);
+    throw new Error(message);
   }
 
   async verifyPin(pin: string) {
@@ -86,7 +103,7 @@ export class RemoteBackend implements Backend {
     this.elevation = undefined;
   }
 
-  subscribe(cb: (e: ServerEvent) => void, onReconnect: () => void) {
+  subscribe(onBatch: (b: ChangeBatch) => void, onOpen: () => void) {
     let ws: WebSocket | undefined;
     let closed = false;
     let retry = 0;
@@ -95,13 +112,14 @@ export class RemoteBackend implements Backend {
       const url = `${this.base.replace(/^http/, "ws")}/api/v1/realtime?token=${encodeURIComponent(this.token)}`;
       ws = new WebSocket(url);
       ws.onopen = () => {
-        if (retry > 0) onReconnect(); // resync after a gap
+        if (retry > 0) onOpen(); // catch up on what happened while disconnected
         retry = 0;
         ping = setInterval(() => ws?.readyState === 1 && ws.send("ping"), 25_000);
       };
       ws.onmessage = (m) => {
         if (m.data === "pong") return;
-        cb(JSON.parse(m.data));
+        const e = JSON.parse(m.data) as { type: string } & ChangeBatch;
+        if (e.type === "changes") onBatch({ rev: e.rev, changes: e.changes });
       };
       ws.onclose = () => {
         clearInterval(ping);
@@ -122,22 +140,21 @@ export class RemoteBackend implements Backend {
 export class DemoBackend implements Backend {
   readonly mode = "demo" as const;
   private state: Snapshot = createSeed();
-  private listeners = new Set<(e: ServerEvent) => void>();
+  private readonly historyFrom = this.state.rev;
+  private history: ChangeBatch[] = [];
+  private listeners = new Set<(b: ChangeBatch) => void>();
   private channel: BroadcastChannel | undefined;
 
   constructor() {
-    // Lets several tabs (e.g. /display and /app) stay in sync without a server.
+    // Lets several tabs (e.g. /display and /app) stay in sync without a server: each tab applies the
+    // others' commands to its own copy.
     try {
       this.channel = new BroadcastChannel("kinboard-demo");
       this.channel.onmessage = (m) => {
-        const e = m.data as ServerEvent;
-        if (e.type === "applied") {
-          try {
-            this.state = applyCommand(this.state, e.command);
-          } catch {
-            /* diverged tab – ignored in demo */
-          }
-          for (const l of this.listeners) l(e);
+        try {
+          this.commit(applyCommand(this.state, m.data as Command));
+        } catch {
+          /* diverged tab – ignored in demo */
         }
       };
     } catch {
@@ -145,25 +162,46 @@ export class DemoBackend implements Backend {
     }
   }
 
-  async load() {
+  private commit(next: Snapshot) {
+    if (next.rev === this.state.rev) return;
+    const batch = { rev: next.rev, changes: diffSnapshots(this.state, next).map(({ prev: _p, ...c }) => c) };
+    this.state = next;
+    this.history.push(batch);
+    for (const l of this.listeners) l(batch);
+  }
+
+  async snapshot() {
     return this.state;
+  }
+
+  async sync(since: number) {
+    if (since < this.historyFrom || since > this.state.rev) return { reset: true as const };
+    return {
+      rev: this.state.rev,
+      changes: this.history.filter((b) => b.rev > since).flatMap((b) => b.changes),
+    };
   }
 
   async send(cmd: Command) {
     await new Promise((r) => setTimeout(r, 60)); // simulate network
-    this.state = applyCommand(this.state, cmd); // throws like the server would
-    const e: ServerEvent = { type: "applied", rev: this.state.rev, command: cmd };
-    for (const l of this.listeners) l(e);
+    let next: Snapshot;
     try {
-      this.channel?.postMessage(e);
+      next = applyCommand(this.state, cmd);
+    } catch (e) {
+      throw new RejectedError((e as Error).message);
+    }
+    this.commit(next);
+    try {
+      this.channel?.postMessage(cmd);
     } catch {
       /* ignore */
     }
+    return { rev: this.state.rev };
   }
 
-  subscribe(cb: (e: ServerEvent) => void) {
-    this.listeners.add(cb);
-    return () => this.listeners.delete(cb);
+  subscribe(onBatch: (b: ChangeBatch) => void) {
+    this.listeners.add(onBatch);
+    return () => this.listeners.delete(onBatch);
   }
 
   /** No server in demo mode, so the PIN is checked here. Never used against a real API. */
@@ -174,7 +212,7 @@ export class DemoBackend implements Backend {
   lock() {}
 }
 
-export function createBackend(device: "display" | "app"): Backend {
+export function createBackend(device: "display" | "app"): Backend & { cacheKey?: string } {
   const demo = import.meta.env.VITE_DEMO === "1" || new URLSearchParams(location.search).has("demo");
   if (demo) return new DemoBackend();
   const base = import.meta.env.VITE_API_URL ?? `${location.protocol}//${location.hostname}:8787`;

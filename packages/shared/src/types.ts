@@ -172,7 +172,8 @@ export const Command = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("event.delete"), eventId: z.string() }),
   z.object({ ...base, type: z.literal("list.add"), list: List }),
   z.object({ ...base, type: z.literal("item.add"), item: ListItem }),
-  z.object({ ...base, type: z.literal("item.toggle"), itemId: z.string() }),
+  /** Sets (not flips) the checked state, so replaying queued offline commands converges (FR-LST-05). */
+  z.object({ ...base, type: z.literal("item.check"), itemId: z.string(), checked: z.boolean() }),
   z.object({ ...base, type: z.literal("item.remove"), itemId: z.string() }),
   z.object({ ...base, type: z.literal("reward.add"), reward: Reward }),
   z.object({

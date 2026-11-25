@@ -250,7 +250,7 @@ function TodayTab({ snapshot, me, run, now, goto }: TabProps & { goto: (t: Tab) 
           <button
             type="button"
             key={i.id}
-            onClick={() => run({ type: "item.toggle", itemId: i.id })}
+            onClick={() => run({ type: "item.check", itemId: i.id, checked: !i.checked })}
             className="press flex w-full items-center gap-3 py-2 text-left text-[15px]"
           >
             <span className="h-6 w-6 rounded-lg border-2 border-line" />
@@ -497,7 +497,7 @@ function ListsTab({ snapshot, run, lists }: TabProps & { lists: Snapshot["lists"
             <button
               type="button"
               key={i.id}
-              onClick={() => run({ type: "item.toggle", itemId: i.id })}
+              onClick={() => run({ type: "item.check", itemId: i.id, checked: !i.checked })}
               className="press flex w-full items-center gap-3 py-2.5 text-left"
             >
               <span

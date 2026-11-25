@@ -15,7 +15,7 @@ const CHILD_SAFE: ReadonlySet<Command["type"]> = new Set([
   "task.complete",
   "task.uncomplete",
   "item.add",
-  "item.toggle",
+  "item.check",
   "reward.request",
 ]);
 
@@ -138,10 +138,11 @@ export function applyCommand(state: Snapshot, cmd: Command): Snapshot {
       assertNewId(s.items, cmd.item.id);
       s.items.push(cmd.item);
       break;
-    case "item.toggle": {
+    case "item.check": {
       const it = s.items.find((i) => i.id === cmd.itemId);
       if (!it) throw new DomainError("not_found", "item");
-      it.checked = !it.checked;
+      if (it.checked === cmd.checked) return state; // already in that state: no new revision
+      it.checked = cmd.checked;
       break;
     }
     case "item.remove":
@@ -225,7 +226,7 @@ export function hiddenListOf(state: Snapshot, cmd: Command): List | undefined {
   const listId =
     cmd.type === "item.add"
       ? cmd.item.listId
-      : cmd.type === "item.toggle" || cmd.type === "item.remove"
+      : cmd.type === "item.check" || cmd.type === "item.remove"
         ? state.items.find((i) => i.id === cmd.itemId)?.listId
         : undefined;
   const list = listId ? state.lists.find((l) => l.id === listId) : undefined;

@@ -36,6 +36,8 @@ export const household = pgTable("household", {
   weekStartsOn: smallint("week_starts_on").notNull(),
   /** Household-scoped monotonic revision; the `rev` of the snapshot. */
   rev: bigint("rev", { mode: "number" }).notNull().default(0),
+  /** change_log is complete after this revision; `/sync?since` below it needs a full snapshot. */
+  historyFromRev: bigint("history_from_rev", { mode: "number" }).notNull().default(0),
   /** Argon2id hash of the adult PIN (gap #2). */
   pinHash: text("pin_hash"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -256,6 +258,8 @@ export const changeLog = pgTable(
   {
     householdId: householdId(),
     rev: bigint("rev", { mode: "number" }).notNull(),
+    /** Insertion order within a revision (deletes before upserts). */
+    seq: bigint("seq", { mode: "number" }).generatedAlwaysAsIdentity(),
     entity: text("entity").notNull(),
     entityId: text("entity_id").notNull(),
     op: text("op", { enum: ["upsert", "delete"] }).notNull(),

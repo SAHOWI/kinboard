@@ -28,6 +28,7 @@ export function DisplayShell() {
   const raw = useStore((s) => s.snapshot);
   const dispatch = useStore((s) => s.dispatch);
   const status = useStore((s) => s.status);
+  const pending = useStore((s) => s.pending);
   const mode = useStore((s) => s.backend?.mode);
   const snapshot = useMemo(() => (raw ? projectForDisplay(raw) : null), [raw]);
 
@@ -179,7 +180,15 @@ export function DisplayShell() {
               <span
                 className={`live-dot h-2 w-2 rounded-full ${status === "offline" ? "bg-[#b4413a]" : "bg-ok"}`}
               />
-              {mode === "demo" ? "Demo" : status === "offline" ? "Offline" : "Live"}
+              {mode === "demo"
+                ? "Demo"
+                : status === "offline"
+                  ? pending
+                    ? `Offline · ${pending} waiting`
+                    : "Offline"
+                  : pending
+                    ? "Syncing…"
+                    : "Live"}
             </span>
           </header>
 

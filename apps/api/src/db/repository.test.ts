@@ -30,7 +30,7 @@ const script = (): Command[] => [
   cmd({ type: "task.complete", taskId: "t_bed", memberId: "m_mia", date: dateKey(NOW) }, child),
   cmd({ type: "task.uncomplete", taskId: "t_bed", memberId: "m_mia", date: dateKey(NOW) }, child),
   cmd({ type: "item.add", item: { id: "i_new", listId: "l_shop", text: "Oats", checked: false, sort: 9.5 } }),
-  cmd({ type: "item.toggle", itemId: "i_new" }, child),
+  cmd({ type: "item.check", itemId: "i_new", checked: true }, child),
   cmd({ type: "item.remove", itemId: "i_new" }),
   cmd({
     type: "event.add",
@@ -115,7 +115,7 @@ describe.each(backends)("DrizzleRepository on %s", (_name, open) => {
 
   it("is idempotent by command id", async () => {
     const repo = await fresh();
-    const c = cmd({ type: "item.toggle", itemId: "i_s0" }, child);
+    const c = cmd({ type: "item.check", itemId: "i_s0", checked: true }, child);
     const first = await repo.apply(HH, c);
     const again = await repo.apply(HH, c);
     expect(first.replay).toBe(false);
@@ -151,20 +151,38 @@ describe.each(backends)("DrizzleRepository on %s", (_name, open) => {
     expect(after.items.filter((i) => i.id.startsWith("i_c"))).toHaveLength(20);
   });
 
-  it("writes one change_log row per changed entity", async () => {
+  it("records a change feed for delta sync and knows where its history starts", async () => {
     const repo = await fresh();
-    const { state } = await repo.apply(HH, cmd({ type: "item.toggle", itemId: "i_s0" }, child));
+    const seedRev = (await repo.snapshot(HH)).rev;
+    const { state } = await repo.apply(HH, cmd({ type: "item.check", itemId: "i_s0", checked: true }, child));
     await repo.apply(HH, cmd({ type: "item.remove", itemId: "i_s0" }));
-    const log = await repo.changesSince(HH, state.rev - 1);
-    expect(log.map((r) => [r.rev, r.entity, r.entityId, r.op])).toEqual([
-      [state.rev, "list_item", "i_s0", "upsert"],
-      [state.rev + 1, "list_item", "i_s0", "delete"],
-    ]);
+    const checked = state.items.find((i) => i.id === "i_s0");
+    expect(await repo.changesSince(HH, seedRev)).toEqual({
+      rev: state.rev + 1,
+      changes: [
+        { entity: "list_item", id: "i_s0", op: "upsert", data: checked },
+        { entity: "list_item", id: "i_s0", op: "delete", prev: checked },
+      ],
+    });
+    expect(await repo.changesSince(HH, state.rev + 1)).toEqual({ rev: state.rev + 1, changes: [] });
+    expect(await repo.changesSince(HH, seedRev - 1)).toBeNull(); // before the history starts
+    expect(await repo.changesSince(HH, state.rev + 5)).toBeNull(); // from the future
+  });
+
+  it("feeds the same changes as the in-memory repository", async () => {
+    const repo = await fresh();
+    const memory = new InMemoryRepository(seed);
+    const from = (await repo.snapshot(HH)).rev;
+    for (const c of script()) {
+      const [a, b] = [await repo.apply(HH, c), await memory.apply(HH, c)];
+      expect(a.changes).toEqual(b.changes);
+    }
+    expect(await repo.changesSince(HH, from)).toEqual(await memory.changesSince(HH, from));
   });
 
   it("prunes old idempotency receipts", async () => {
     const repo = await fresh();
-    const c = cmd({ type: "item.toggle", itemId: "i_s0" }, child);
+    const c = cmd({ type: "item.check", itemId: "i_s0", checked: true }, child);
     await repo.apply(HH, c);
     expect(await repo.pruneReceipts(new Date(Date.now() + 8 * 86_400_000))).toBeGreaterThan(0);
     expect((await repo.apply(HH, c)).replay).toBe(false);
@@ -175,11 +193,12 @@ describe("persistence across restarts (gap #4)", () => {
   const dir = mkdtempSync(join(tmpdir(), "kinboard-pglite-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("keeps applied commands after the database is closed and reopened", async () => {
+  // Opening an on-disk PGlite twice (with migrations) takes several seconds.
+  it("keeps applied commands after the database is closed and reopened", { timeout: 30_000 }, async () => {
     const first = await openPglite(dir);
     const repo = new DrizzleRepository(first.db);
     await repo.seed(seed());
-    const { state } = await repo.apply(HH, cmd({ type: "item.toggle", itemId: "i_s0" }, child));
+    const { state } = await repo.apply(HH, cmd({ type: "item.check", itemId: "i_s0", checked: true }, child));
     await first.close();
 
     const second = await openPglite(dir);

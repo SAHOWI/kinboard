@@ -60,7 +60,7 @@ describe("API", () => {
     await app.ready();
     const listen = async (token: string) => {
       const ws = await app.injectWS(`/api/v1/realtime?token=${token}`);
-      const events: { type: string }[] = [];
+      const events: { type: string; rev: number; changes: { id: string }[] }[] = [];
       ws.on("message", (m) => events.push(JSON.parse(m.toString())));
       return { ws, events };
     };
@@ -70,9 +70,18 @@ describe("API", () => {
     expect((await send(app, ANNA, { type: "item.remove", itemId: "i_secret" })).statusCode).toBe(200);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(tom.events.map((e) => e.type)).toEqual(["applied", "applied"]);
-    expect(mia.events.map((e) => e.type)).toEqual(["rev", "rev"]);
-    expect(display.events.map((e) => e.type)).toEqual(["rev", "rev"]);
+    const ids = (c: typeof tom) => c.events.map((e) => [e.type, e.changes.map((x) => x.id)]);
+    expect(ids(tom)).toEqual([
+      ["changes", ["i_secret"]],
+      ["changes", ["i_secret"]],
+    ]);
+    // Others still get every revision (so they can detect gaps), just without the hidden changes.
+    for (const viewer of [mia, display])
+      expect(ids(viewer)).toEqual([
+        ["changes", []],
+        ["changes", []],
+      ]);
+    expect(mia.events.map((e) => e.rev)).toEqual(tom.events.map((e) => e.rev));
     expect(JSON.stringify([...mia.events, ...display.events])).not.toContain("i_secret");
     for (const c of [tom, mia, display]) c.ws.terminate();
     await app.close();
@@ -149,7 +158,7 @@ describe("API", () => {
     expect((await verifyPin(app, "1234")).statusCode).toBe(403);
   });
 
-  it("broadcasts the server-built actor and closes unauthenticated sockets", async () => {
+  it("broadcasts the server's resulting changes and closes unauthenticated sockets", async () => {
     const app = make();
     await app.ready();
     const anon = await app.injectWS("/api/v1/realtime");
@@ -157,7 +166,7 @@ describe("API", () => {
     expect(closed).toBe(4401);
 
     const ws = await app.injectWS(`/api/v1/realtime?token=${DISPLAY}`);
-    const got = new Promise<{ command: { actor: unknown } }>((r) =>
+    const got = new Promise<{ type: string; changes: { entity: string }[] }>((r) =>
       ws.on("message", (m) => r(JSON.parse(m.toString()))),
     );
     const done = {
@@ -167,9 +176,33 @@ describe("API", () => {
       date: dateKey(new Date()),
     };
     await send(app, DISPLAY, { ...done, actor: crafted });
-    expect((await got).command.actor).toEqual({ memberId: null, elevated: false, device: "display" });
+    const batch = await got;
+    expect(batch.type).toBe("changes");
+    expect(batch.changes.map((c) => c.entity)).toEqual(["task_completion", "points_ledger"]);
+    expect(JSON.stringify(batch)).not.toContain("actor"); // clients never replay other clients' commands
     ws.terminate();
     await app.close();
+  });
+
+  it("serves per-viewer delta sync and asks for a reload when history is unavailable (spec §5.3)", async () => {
+    const app = make();
+    const sync = async (token: string, since: string | number) =>
+      app.inject({ url: `/api/v1/sync?since=${since}`, headers: auth(token) });
+    const { rev } = (await app.inject({ url: "/api/v1/snapshot", headers: auth(ANNA) })).json();
+    const item = { id: "i_secret", listId: "l_gifts", text: "Bike", checked: false, sort: 1 };
+    await send(app, ANNA, { type: "item.add", item });
+    await send(app, ANNA, { type: "item.check", itemId: "i_s0", checked: true });
+
+    const tom = (await sync("dev:app:m_tom", rev)).json();
+    const mia = (await sync(MIA, rev)).json();
+    expect(tom.rev).toBe(rev + 2);
+    expect(tom.changes.map((c: { id: string }) => c.id)).toEqual(["i_secret", "i_s0"]);
+    expect(mia).toEqual({ rev: rev + 2, changes: [tom.changes[1]] });
+    expect((await sync(MIA, rev + 2)).json()).toEqual({ rev: rev + 2, changes: [] });
+    expect((await sync(MIA, rev - 1)).json()).toEqual({ reset: true });
+    expect((await sync(MIA, rev + 9)).json()).toEqual({ reset: true });
+    expect((await sync(MIA, "abc")).statusCode).toBe(400);
+    expect((await app.inject("/api/v1/sync?since=0")).statusCode).toBe(401);
   });
 
   it("rejects malformed commands with problem+json", async () => {

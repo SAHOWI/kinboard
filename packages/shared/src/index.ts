@@ -2,6 +2,7 @@ export * from "./types.ts";
 export * from "./reducer.ts";
 export * from "./selectors.ts";
 export * from "./seed.ts";
+export * from "./sync.ts";
 
 let counter = 0;
 /** Sortable, collision-resistant id (UUID v7 on the server in production). */

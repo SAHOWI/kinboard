@@ -63,7 +63,7 @@ with **two responsive layout shells** (`/display`, `/app`). Domain logic, schema
 | Styling | **Tailwind CSS 4** + CSS variables (design tokens) | MIT | Consistent tokens for display and mobile, theming |
 | Accessible primitives | **Radix UI Primitives** | MIT | Dialogs, popovers, a11y |
 | Routing | **TanStack Router** (or React Router 7) | MIT | Type-safe routes |
-| Server state | **TanStack Query 5** + IndexedDB persister | MIT | Caching, offline, optimistic updates |
+| Server state | Own `SyncEngine` + **IndexedDB** (no library) | — | Delta sync, offline outbox, optimistic updates (§5.3). TanStack Query 5 was planned; not needed with the command/change model |
 | Client state | **Zustand** | MIT | Small, simple |
 | Validation | **Zod** | MIT | Shared schemas between client and server |
 | Dates and recurrence | **date-fns 4** + **@date-fns/tz**, **rrule** | MIT / BSD-3 | RFC 5545 recurrence |
@@ -186,13 +186,13 @@ All mutable rows carry `rev` (a household-scoped monotonic counter) and `updated
 | GET/POST/PATCH/DELETE | `/lists`, `/lists/:id/items` | Lists |
 | POST | `/external-calendars` | Link a provider (ICS URL, CalDAV creds, or OAuth code) |
 | POST | `/pin/verify` | Verify the adult PIN on a display → short-lived elevated token (5 min) |
-| GET | `/sync?since=<rev>` | Changes since a revision (delta sync) |
-| WS | `/realtime` | Server → client `{type:"rev", rev}` and entity patches. Client → server heartbeat |
+| GET | `/sync?since=<rev>` | `{rev, changes}` since a revision, filtered per viewer, or `{reset:true}` when that history is unavailable |
+| WS | `/realtime` | Server → client `{type:"changes", rev, changes}` per revision, filtered per viewer. Client → server `ping` heartbeat |
 
 ### 5.3 Sync protocol
-1. The client holds `lastRev`. On (re)connect it calls `GET /sync?since=lastRev` and applies the changes in order.
-2. The server writes each mutation and a `change_log` row in **one transaction**, then sends `NOTIFY household_<id>`. Each API node holding sockets for that household pushes the patch.
-3. Offline clients queue mutations in an IndexedDB **outbox** with idempotency keys and replay them in order when back online. Conflicts are **last-writer-wins per field**. For list item ordering, fractional indexes make concurrent inserts merge cleanly.
+1. The client keeps `base` (the last server-confirmed state) and `base.rev`. It applies change batches only at `base.rev + 1`; on a gap or (re)connect it calls `GET /sync?since=base.rev`, and on `{reset:true}` reloads `/snapshot`. Clients **never replay other clients' commands**: they apply the server's resulting entity changes (`applyChanges`), so actor, time and visibility cannot make them diverge.
+2. The server applies each command in **one transaction**: reducer → `diffSnapshots` → entity rows + one `change_log` row per changed entity (deletes keep the removed entity server-side for per-viewer filtering) → household `rev`. It then pushes `{type:"changes"}` to every socket, filtered per viewer (`projectChanges`); a viewer whose changes are all hidden still gets an empty batch so its `rev` stays contiguous. `NOTIFY household_<id>` for multi-node fan-out is not implemented yet (single API node).
+3. Each device queues its own commands in an IndexedDB **outbox** (with `base`, so it starts offline from cache) and sends them in order with their command ids as idempotency keys. The UI shows `base` + outbox replayed through the reducer. Conflicts resolve by **replaying intent through the server's reducer**, so commands must be idempotent where devices race: `item.check {checked}` instead of a toggle. Queued commands older than the 7-day receipt window are dropped. For list item ordering, fractional indexes make concurrent inserts merge cleanly.
 4. External events never travel through `change_log`. Clients fetch them through `/events` for the visible window, and the display caches only ±14 days (FR-CAL-10).
 
 ## 6. Calendar sync engine (worker)

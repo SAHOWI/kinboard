@@ -1,41 +1,74 @@
-import { type Command, type Snapshot, applyCommand, createSeed } from "@kinboard/shared";
+import {
+  type Command,
+  type Snapshot,
+  type StoredChange,
+  applyCommand,
+  createSeed,
+  diffSnapshots,
+} from "@kinboard/shared";
+
+export interface Applied {
+  state: Snapshot;
+  /** The revision this command was applied to. `state.rev > fromRev` exactly when it created a revision. */
+  fromRev: number;
+  /** True when the command id was already applied; nothing changed this time. */
+  replay: boolean;
+  /** What the command changed (empty for replays and no-ops). */
+  changes: StoredChange[];
+}
 
 /**
- * Persistence port. MVP: in-memory. Milestone M2 swaps in a Drizzle/PostgreSQL implementation
- * (each command = one transaction writing entity rows + a change_log row, then NOTIFY).
+ * Persistence port: `DrizzleRepository` (PostgreSQL / PGlite) and `InMemoryRepository` (tests).
+ * Each command is applied atomically and recorded as entity changes for delta sync (spec §5.3).
  */
 export interface Repository {
   snapshot(householdId: string): Promise<Snapshot>;
-  /** Applies a command atomically. Returns the new state and whether it was a replay of a known id. */
-  apply(householdId: string, cmd: Command): Promise<{ state: Snapshot; replay: boolean }>;
+  apply(householdId: string, cmd: Command): Promise<Applied>;
+  /** All changes after `since`, or null when that history is unavailable (the client reloads the snapshot). */
+  changesSince(householdId: string, since: number): Promise<{ rev: number; changes: StoredChange[] } | null>;
+}
+
+interface Household {
+  state: Snapshot;
+  historyFromRev: number;
+  log: { rev: number; changes: StoredChange[] }[];
+  seen: Set<string>; // idempotency keys; grows forever (tests and demos only)
 }
 
 export class InMemoryRepository implements Repository {
-  private states = new Map<string, Snapshot>();
-  private seen = new Map<string, Set<string>>(); // idempotency keys per household
+  private households = new Map<string, Household>();
 
   constructor(private seed: () => Snapshot = createSeed) {}
 
-  private get(id: string): Snapshot {
-    let s = this.states.get(id);
-    if (!s) {
-      s = this.seed();
-      this.states.set(id, s);
+  private get(id: string): Household {
+    let h = this.households.get(id);
+    if (!h) {
+      const state = this.seed();
+      h = { state, historyFromRev: state.rev, log: [], seen: new Set() };
+      this.households.set(id, h);
     }
-    return s;
+    return h;
   }
 
   async snapshot(householdId: string) {
-    return this.get(householdId);
+    return this.get(householdId).state;
   }
 
-  async apply(householdId: string, cmd: Command) {
-    const seen = this.seen.get(householdId) ?? new Set<string>();
-    this.seen.set(householdId, seen);
-    if (seen.has(cmd.id)) return { state: this.get(householdId), replay: true };
-    const next = applyCommand(this.get(householdId), cmd); // throws DomainError on rejection
-    this.states.set(householdId, next);
-    seen.add(cmd.id);
-    return { state: next, replay: false };
+  async apply(householdId: string, cmd: Command): Promise<Applied> {
+    const h = this.get(householdId);
+    const fromRev = h.state.rev;
+    if (h.seen.has(cmd.id)) return { state: h.state, fromRev, replay: true, changes: [] };
+    const next = applyCommand(h.state, cmd); // throws DomainError on rejection
+    const changes = diffSnapshots(h.state, next);
+    if (changes.length) h.log.push({ rev: next.rev, changes });
+    h.state = next;
+    h.seen.add(cmd.id);
+    return { state: next, fromRev, replay: false, changes };
+  }
+
+  async changesSince(householdId: string, since: number) {
+    const h = this.get(householdId);
+    if (since > h.state.rev || since < h.historyFromRev) return null;
+    return { rev: h.state.rev, changes: h.log.filter((b) => b.rev > since).flatMap((b) => b.changes) };
   }
 }

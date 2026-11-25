@@ -1,7 +1,14 @@
-import { type Command, type Snapshot, applyCommand } from "@kinboard/shared";
+import {
+  type Command,
+  type EntityName,
+  type Snapshot,
+  type StoredChange,
+  applyCommand,
+  diffSnapshots,
+} from "@kinboard/shared";
 import { type SQL, and, asc, eq, getTableColumns, gt, inArray, lt, or, sql } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
-import type { Repository } from "../repository.ts";
+import type { Applied, Repository } from "../repository.ts";
 import type { Db } from "./client.ts";
 import * as t from "./schema.ts";
 
@@ -12,12 +19,10 @@ type Entity = { id: string } | Snapshot["completions"][number];
 
 /** How one domain collection maps onto a table (plus an optional join table for an id array). */
 interface Collection<E extends Entity> {
-  entity: string;
+  entity: Exclude<EntityName, "household">;
   table: PgTable & { householdId: PgColumn; ord: PgColumn };
   /** Columns identifying a row within the household. */
   keyCols: PgColumn[];
-  pick(s: Snapshot): E[];
-  key(e: E): string;
   keyValues(e: E): unknown[];
   toRow(e: E): Row;
   join?: {
@@ -28,9 +33,8 @@ interface Collection<E extends Entity> {
   };
 }
 
-const byId = <E extends { id: string }>(c: Omit<Collection<E>, "key" | "keyValues">): Collection<E> => ({
+const byId = <E extends { id: string }>(c: Omit<Collection<E>, "keyValues">): Collection<E> => ({
   ...c,
-  key: (e) => e.id,
   keyValues: (e) => [e.id],
 });
 
@@ -39,14 +43,12 @@ const collections = [
     entity: "member",
     table: t.member,
     keyCols: [t.member.id],
-    pick: (s) => s.members,
     toRow: (m) => ({ id: m.id, name: m.name, role: m.role, color: m.color, emoji: m.emoji }),
   }),
   byId<Snapshot["events"][number]>({
     entity: "event",
     table: t.event,
     keyCols: [t.event.id],
-    pick: (s) => s.events,
     toRow: (e) => ({
       id: e.id,
       title: e.title,
@@ -68,14 +70,12 @@ const collections = [
     entity: "routine",
     table: t.routine,
     keyCols: [t.routine.id],
-    pick: (s) => s.routines,
     toRow: (r) => ({ id: r.id, name: r.name, icon: r.icon, windowStart: r.from, windowEnd: r.to }),
   }),
   byId<Snapshot["tasks"][number]>({
     entity: "task",
     table: t.task,
     keyCols: [t.task.id],
-    pick: (s) => s.tasks,
     toRow: (k) => ({
       id: k.id,
       title: k.title,
@@ -96,8 +96,6 @@ const collections = [
     entity: "task_completion",
     table: t.taskCompletion,
     keyCols: [t.taskCompletion.taskId, t.taskCompletion.memberId, t.taskCompletion.occurrenceDate],
-    pick: (s) => s.completions,
-    key: (c) => `${c.taskId}:${c.memberId}:${c.date}`,
     keyValues: (c) => [c.taskId, c.memberId, c.date],
     toRow: (c) => ({ taskId: c.taskId, memberId: c.memberId, occurrenceDate: c.date, completedAt: c.at }),
   } satisfies Collection<Snapshot["completions"][number]>,
@@ -105,14 +103,12 @@ const collections = [
     entity: "reward",
     table: t.reward,
     keyCols: [t.reward.id],
-    pick: (s) => s.rewards,
     toRow: (r) => ({ id: r.id, title: r.title, icon: r.icon, cost: r.cost }),
   }),
   byId<Snapshot["redemptions"][number]>({
     entity: "reward_redemption",
     table: t.rewardRedemption,
     keyCols: [t.rewardRedemption.id],
-    pick: (s) => s.redemptions,
     toRow: (r) => ({
       id: r.id,
       rewardId: r.rewardId,
@@ -125,7 +121,6 @@ const collections = [
     entity: "points_ledger",
     table: t.pointsLedger,
     keyCols: [t.pointsLedger.id],
-    pick: (s) => s.ledger,
     toRow: (l) => ({
       id: l.id,
       memberId: l.memberId,
@@ -139,7 +134,6 @@ const collections = [
     entity: "list",
     table: t.list,
     keyCols: [t.list.id],
-    pick: (s) => s.lists,
     toRow: (l) => ({ id: l.id, name: l.name, icon: l.icon, kind: l.kind, hidden: l.hidden }),
     join: {
       table: t.listVisibility,
@@ -152,29 +146,17 @@ const collections = [
     entity: "list_item",
     table: t.listItem,
     keyCols: [t.listItem.id],
-    pick: (s) => s.items,
     toRow: (i) => ({ id: i.id, listId: i.listId, text: i.text, checked: i.checked, sort: i.sort }),
   }),
   byId<Snapshot["meals"][number]>({
     entity: "meal",
     table: t.meal,
     keyCols: [t.meal.id],
-    pick: (s) => s.meals,
     toRow: (m) => ({ id: m.id, date: m.date, slot: m.slot, title: m.title, icon: m.icon }),
   }),
 ] as unknown as Collection<Entity>[];
 
-/** JSON with sorted keys, so objects that differ only in key order compare equal. */
-function stable(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
-  if (v && typeof v === "object")
-    return `{${Object.keys(v)
-      .filter((k) => (v as Row)[k] !== undefined)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stable((v as Row)[k])}`)
-      .join(",")}}`;
-  return JSON.stringify(v);
-}
+const specs = new Map<string, Collection<Entity>>(collections.map((c) => [c.entity, c]));
 
 const omitNull = <T extends Row>(o: T): T =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null)) as T;
@@ -214,11 +196,18 @@ export class DrizzleRepository implements Repository {
           locale: h.locale,
           weekStartsOn: h.weekStartsOn,
           rev: seed.rev,
+          historyFromRev: seed.rev,
         })
         .onConflictDoNothing()
         .returning({ id: t.household.id });
       if (!inserted.length) return false;
-      await this.write(tx, h.id, { ...EMPTY, rev: seed.rev, household: h }, seed, false);
+      await this.write(
+        tx,
+        h.id,
+        diffSnapshots({ ...EMPTY, rev: seed.rev, household: h }, seed),
+        seed.rev,
+        false,
+      );
       return true;
     });
   }
@@ -227,7 +216,7 @@ export class DrizzleRepository implements Repository {
     return this.load(this.db, householdId);
   }
 
-  async apply(householdId: string, cmd: Command): Promise<{ state: Snapshot; replay: boolean }> {
+  async apply(householdId: string, cmd: Command): Promise<Applied> {
     return this.db.transaction(async (tx) => {
       const [locked] = await tx
         .select({ id: t.household.id })
@@ -240,24 +229,37 @@ export class DrizzleRepository implements Repository {
         .select({ rev: t.commandReceipt.rev })
         .from(t.commandReceipt)
         .where(and(eq(t.commandReceipt.householdId, householdId), eq(t.commandReceipt.commandId, cmd.id)));
-      if (receipt) return { state: prev, replay: true };
+      if (receipt) return { state: prev, fromRev: prev.rev, replay: true, changes: [] };
 
       const next = applyCommand(prev, cmd); // throws DomainError → the transaction rolls back
-      await this.write(tx, householdId, prev, next, true);
+      const changes = diffSnapshots(prev, next);
+      await this.write(tx, householdId, changes, next.rev, true);
       if (next.rev !== prev.rev)
         await tx.update(t.household).set({ rev: next.rev }).where(eq(t.household.id, householdId));
       await tx.insert(t.commandReceipt).values({ householdId, commandId: cmd.id, rev: next.rev });
-      return { state: next, replay: false };
+      return { state: next, fromRev: prev.rev, replay: false, changes };
     });
   }
 
-  /** change_log rows after `rev`, in order (for `GET /sync?since=rev`, M2 step 7). */
-  async changesSince(householdId: string, rev: number) {
-    return this.db
+  /** Changes after `since`, in order, or null when change_log does not reach back that far (spec §5.3). */
+  async changesSince(householdId: string, since: number) {
+    const [h] = await this.db
+      .select({ rev: t.household.rev, historyFromRev: t.household.historyFromRev })
+      .from(t.household)
+      .where(eq(t.household.id, householdId));
+    if (!h || since > h.rev || since < h.historyFromRev) return null;
+    const rows = await this.db
       .select()
       .from(t.changeLog)
-      .where(and(eq(t.changeLog.householdId, householdId), gt(t.changeLog.rev, rev)))
-      .orderBy(asc(t.changeLog.rev), asc(t.changeLog.entity), asc(t.changeLog.entityId));
+      .where(and(eq(t.changeLog.householdId, householdId), gt(t.changeLog.rev, since)))
+      .orderBy(asc(t.changeLog.rev), asc(t.changeLog.seq));
+    const changes: StoredChange[] = rows.map((r) => ({
+      entity: r.entity as EntityName,
+      id: r.entityId,
+      op: r.op,
+      ...(r.op === "delete" ? { prev: r.payload } : { data: r.payload }),
+    }));
+    return { rev: h.rev, changes };
   }
 
   /** Deletes idempotency receipts older than 7 days before `now`. Returns how many. */
@@ -346,70 +348,68 @@ export class DrizzleRepository implements Repository {
     };
   }
 
-  /** Persists the difference between two snapshots: deletes first, then upserts that keep each row's `ord`. */
-  private async write(db: Db, householdId: string, prev: Snapshot, next: Snapshot, log: boolean) {
-    const changes: (typeof t.changeLog.$inferInsert)[] = [];
-    for (const c of collections) {
-      const before = new Map(c.pick(prev).map((e) => [c.key(e), e]));
-      const after = new Map(c.pick(next).map((e) => [c.key(e), e]));
-      const removed = [...before.entries()].filter(([k]) => !after.has(k));
-      const changed = [...after.entries()].filter(
-        ([k, e]) => !before.has(k) || stable(before.get(k)) !== stable(e),
+  /** Persists changes from `diffSnapshots`: deletes first, then upserts that keep each row's `ord`. */
+  private async write(db: Db, householdId: string, changes: StoredChange[], rev: number, log: boolean) {
+    const group = (op: StoredChange["op"]) => {
+      const m = new Map<string, StoredChange[]>();
+      for (const ch of changes) if (ch.op === op) m.set(ch.entity, [...(m.get(ch.entity) ?? []), ch]);
+      return m;
+    };
+    for (const [entity, removed] of group("delete")) {
+      const c = specs.get(entity);
+      if (!c) continue;
+      const match = removed.map(
+        (ch) => and(...c.keyCols.map((col, i) => eq(col, c.keyValues(ch.prev as Entity)[i]))) as SQL,
       );
-
-      if (removed.length) {
-        const match = removed.map(
-          ([, e]) => and(...c.keyCols.map((col, i) => eq(col, c.keyValues(e)[i]))) as SQL,
-        );
-        await db.delete(c.table).where(and(eq(c.table.householdId, householdId), or(...match)));
-      }
-      if (changed.length) {
-        const values = changed.map(([, e]) => ({ householdId, ...c.toRow(e) }));
-        const cols = getTableColumns(c.table) as Record<string, PgColumn>;
-        const keyNames = new Set(["householdId", ...c.keyCols.map((k) => k.name)]);
-        const update = Object.fromEntries(
-          Object.keys(values[0])
-            .filter((k) => !keyNames.has(k) && !keyNames.has(cols[k].name))
-            .map((k) => [k, sql.raw(`excluded."${cols[k].name}"`)]),
-        );
+      await db.delete(c.table).where(and(eq(c.table.householdId, householdId), or(...match)));
+    }
+    for (const [entity, changed] of group("upsert")) {
+      if (entity === "household") {
+        const h = changed[0].data as Snapshot["household"];
         await db
-          .insert(c.table)
-          .values(values as never)
-          .onConflictDoUpdate({ target: [c.table.householdId, ...c.keyCols], set: update as never });
-
-        if (c.join) {
-          const j = c.join;
-          const parents = changed.map(([k]) => k);
-          await db
-            .delete(j.table)
-            .where(and(eq(j.table.householdId, householdId), inArray(j.parentCol, parents)));
-          const joinRows = changed.flatMap(([k, e]) =>
-            j.pick(e).map((memberId, pos) => ({ householdId, ...j.row(k, memberId, pos) })),
-          );
-          if (joinRows.length) await db.insert(j.table).values(joinRows as never);
-        }
+          .update(t.household)
+          .set({ name: h.name, timezone: h.timezone, locale: h.locale, weekStartsOn: h.weekStartsOn })
+          .where(eq(t.household.id, householdId));
+        continue;
       }
-      if (log) {
-        for (const [k] of removed)
-          changes.push({
-            householdId,
-            rev: next.rev,
-            entity: c.entity,
-            entityId: k,
-            op: "delete",
-            payload: null,
-          });
-        for (const [k, e] of changed)
-          changes.push({
-            householdId,
-            rev: next.rev,
-            entity: c.entity,
-            entityId: k,
-            op: "upsert",
-            payload: e,
-          });
+      const c = specs.get(entity);
+      if (!c) continue;
+      const entities = changed.map((ch) => ch.data as Entity);
+      const values = entities.map((e) => ({ householdId, ...c.toRow(e) }));
+      const cols = getTableColumns(c.table) as Record<string, PgColumn>;
+      const keyNames = new Set(["householdId", ...c.keyCols.map((k) => k.name)]);
+      const update = Object.fromEntries(
+        Object.keys(values[0])
+          .filter((k) => !keyNames.has(k) && !keyNames.has(cols[k].name))
+          .map((k) => [k, sql.raw(`excluded."${cols[k].name}"`)]),
+      );
+      await db
+        .insert(c.table)
+        .values(values as never)
+        .onConflictDoUpdate({ target: [c.table.householdId, ...c.keyCols], set: update as never });
+
+      if (c.join) {
+        const j = c.join;
+        const parents = changed.map((ch) => ch.id);
+        await db
+          .delete(j.table)
+          .where(and(eq(j.table.householdId, householdId), inArray(j.parentCol, parents)));
+        const joinRows = changed.flatMap((ch, k) =>
+          j.pick(entities[k]).map((memberId, pos) => ({ householdId, ...j.row(ch.id, memberId, pos) })),
+        );
+        if (joinRows.length) await db.insert(j.table).values(joinRows as never);
       }
     }
-    if (changes.length) await db.insert(t.changeLog).values(changes);
+    if (log && changes.length)
+      await db.insert(t.changeLog).values(
+        changes.map((ch) => ({
+          householdId,
+          rev,
+          entity: ch.entity,
+          entityId: ch.id,
+          op: ch.op,
+          payload: ch.op === "delete" ? ch.prev : ch.data, // the removed entity stays server-side
+        })),
+      );
   }
 }
