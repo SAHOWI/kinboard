@@ -1,0 +1,19 @@
+# Raspberry Pi OS Lite (Bookworm) kiosk: Cage (Wayland kiosk compositor) + Chromium.
+# Install: apt install cage chromium-browser seatd && systemctl enable --now kinboard-kiosk
+[Unit]
+Description=Kinboard display kiosk
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+
+[Service]
+User=kinboard
+PAMName=login
+TTYPath=/dev/tty1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=KINBOARD_URL=https://kinboard.example.com/#/display
+ExecStart=/usr/bin/cage -d -- /opt/kinboard/launch-chromium.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

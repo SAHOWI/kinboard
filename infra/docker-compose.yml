@@ -1,0 +1,40 @@
+# Self-hosted Kinboard: `docker compose -f infra/docker-compose.yml up -d --build`
+# MVP note: the API still uses its in-memory repository. Postgres is provisioned now
+# so milestone M2 (Drizzle + pg-boss) can switch over without changing the infrastructure.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: kinboard
+      POSTGRES_USER: kinboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kinboard"]
+      interval: 10s
+    restart: unless-stopped
+
+  api:
+    build: { context: .., dockerfile: apps/api/Dockerfile }
+    environment:
+      DATABASE_URL: postgres://kinboard:${POSTGRES_PASSWORD:-change-me}@postgres:5432/kinboard
+      KINBOARD_MASTER_KEY: ${KINBOARD_MASTER_KEY:?set a 32-byte base64 key}
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports: ["80:80", "443:443"]
+    environment:
+      KINBOARD_DOMAIN: ${KINBOARD_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../apps/web/dist:/srv/web:ro   # run `pnpm --filter @kinboard/web build` first
+      - caddydata:/data
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddydata:

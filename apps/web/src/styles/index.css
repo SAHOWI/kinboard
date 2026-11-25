@@ -1,0 +1,158 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+
+/* Design tokens (spec §8.1) */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces Variable", ui-serif, Georgia, serif;
+
+  --color-paper: #f6f3ec;
+  --color-paper-2: #efeadf;
+  --color-card: #ffffff;
+  --color-line: #e6dfd1;
+  --color-ink: #1d2330;
+  --color-ink-2: #4a5161;
+  --color-muted: #858a96;
+  --color-brand: #24343d;
+  --color-accent: #d9643f;
+  --color-ok: #2f9e6e;
+
+  --radius-xl2: 1.25rem;
+  --radius-xl3: 1.75rem;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button {
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
+
+@layer components {
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-xl3);
+    box-shadow: 0 1px 0 rgba(29, 35, 48, 0.03), 0 8px 24px -16px rgba(29, 35, 48, 0.18);
+  }
+
+  .press {
+    transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  }
+  .press:active {
+    transform: scale(0.97);
+  }
+}
+
+/* Celebration burst on task completion (FR-TSK-03) */
+@keyframes kb-burst {
+  0% {
+    transform: translate(-50%, -50%) rotate(0) scale(0.4);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)) scale(1);
+    opacity: 0;
+  }
+}
+.burst-piece {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 14px;
+  border-radius: 3px;
+  pointer-events: none;
+  animation: kb-burst 900ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+@keyframes kb-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.pop {
+  animation: kb-pop 320ms ease-out;
+}
+
+@keyframes kb-rise {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.rise {
+  animation: kb-rise 260ms ease-out both;
+}
+
+@keyframes kb-drift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(4%, -3%) scale(1.08);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+.drift {
+  animation: kb-drift 28s ease-in-out infinite;
+}
+
+@keyframes kb-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.live-dot {
+  animation: kb-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .burst-piece,
+  .pop,
+  .rise,
+  .drift,
+  .live-dot {
+    animation: none !important;
+  }
+}

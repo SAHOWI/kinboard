@@ -1,0 +1,28 @@
+{
+  "name": "kinboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source family organiser: wall display + mobile app + self-hostable server",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter ./apps/api --filter ./apps/web dev",
+    "dev:demo": "pnpm --filter @kinboard/web dev:demo",
+    "build": "pnpm -r build",
+    "build:demo": "pnpm --filter @kinboard/web build:demo",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "@biomejs/biome"]
+  }
+}

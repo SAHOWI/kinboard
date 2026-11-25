@@ -1,0 +1,32 @@
+{
+  "name": "@kinboard/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:demo": "VITE_DEMO=1 vite",
+    "build": "tsc -p . && vite build",
+    "build:demo": "VITE_DEMO=1 SINGLE_FILE=1 vite build --outDir dist-demo",
+    "preview": "vite preview",
+    "test": "echo 'web: component tests land in M2 (Testing Library + Playwright)'",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@fontsource-variable/fraunces": "^5.1.1",
+    "@fontsource-variable/inter": "^5.1.1",
+    "@kinboard/shared": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "vite": "^6.0.11",
+    "vite-plugin-singlefile": "^2.1.0"
+  }
+}
